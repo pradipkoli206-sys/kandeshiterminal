@@ -1,11 +1,9 @@
-import os
 import requests
 import re
+import random
 from flask import Flask, render_template_string, jsonify, request
 from datetime import datetime
 import pytz
-from NorenRestApiPy.NorenApi import NorenApi
-import pyotp
 
 app = Flask(__name__)
 
@@ -15,44 +13,18 @@ CREDIT = "P. KOLI | THE DISCIPLINE TRADER"
 
 STOCKS = ["SOUTHBANK", "UCOBANK", "CENTRALBK", "IDFCFIRSTB", "RTNINDIA", "RELIANCE", "ZOMATO", "IRFC", "TATASTEEL", "PNB"]
 
-# --- SHOONYA API CONNECTION ---
-class ShoonyaApiPy(NorenApi):
-    def __init__(self):
-        NorenApi.__init__(self, host='https://api.finvasia.com/NorenWSTP/', websocket='wss://api.finvasia.com/NorenWSTP/')
-
-api = ShoonyaApiPy()
-is_logged_in = False
-
-def login_to_shoonya():
-    global is_logged_in
-    try:
-        user    = os.environ.get('SH_USER')
-        pwd     = os.environ.get('SH_PWD')
-        vc      = os.environ.get('SH_VC')
-        apikey  = os.environ.get('SH_APIKEY')
-        token   = os.environ.get('SH_TOTP_TOKEN')
-
-        if not all([user, pwd, vc, apikey, token]): return False
-
-        otp = pyotp.TOTP(token).now()
-        ret = api.login(userid=user, password=pwd, twoFA=otp, vendor_code=vc, api_secret=apikey, imei='12345')
-        
-        if ret and ret.get('stat') == 'Ok':
-            is_logged_in = True
-            return True
-        return False
-    except: return False
-
-# सुरुवातीला लॉगिन प्रयत्न
-login_to_shoonya()
+session = requests.Session()
+session.headers.update({
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
+})
 
 def fetch_live_index():
     try:
-        if not is_logged_in: login_to_shoonya()
-        # Nifty 50 चा डेटा Shoonya कडून
-        quote = api.get_quotes(exchange='NSE', tradingsymbol='Nifty 50-INDEX')
-        if quote and quote.get('stat') == 'Ok':
-            nifty_change = float(quote['pc'])
+        url = "https://www.google.com/finance/quote/NIFTY_50:INDEXNSE"
+        r = session.get(url, timeout=10)
+        match = re.search(r'data-price-percentage-change="([-]?[\d,.]+)"', r.text)
+        if match:
+            nifty_change = float(match.group(1))
             if nifty_change > 0.15: return f"UP {nifty_change}% 📈"
             elif nifty_change < -0.15: return f"DOWN {nifty_change}% 📉"
             else: return f"SIDEWAYS {nifty_change}% ↔️"
@@ -61,30 +33,23 @@ def fetch_live_index():
 
 def get_ultra_pro_data(ticker):
     try:
-        if not is_logged_in: login_to_shoonya()
-        # स्टॉकचा डेटा Shoonya कडून (Real-Time)
-        quote = api.get_quotes(exchange='NSE', tradingsymbol=f'{ticker}-EQ')
+        url = f"https://www.google.com/finance/quote/{ticker}:NSE"
+        r = session.get(url, timeout=10)
+        p_match = re.search(r'data-last-price="([\d,.]+)"', r.text)
+        c_match = re.search(r'data-price-percentage-change="([-]?[\d,.]+)"', r.text)
+        if not p_match: return None
         
-        if not quote or quote.get('stat') != 'Ok': return None
-        
-        price_val = float(quote['lp'])
-        change = float(quote['pc'])
-        high_val = float(quote['h'])
-        low_val = float(quote['l'])
-        
+        price_val = float(p_match.group(1).replace(',', ''))
         price = "{:.2f}".format(price_val)
+        change = float(c_match.group(1)) if c_match else 0.0
         score = int(75 + (change * 4))
 
-        # --- REAL-TIME SMC LOGIC (Using Shoonya Precise Data) ---
+        # --- REAL-TIME SMC LOGIC ---
         trend_sync = "YES ✅" if abs(change) > 0.7 else "NO ❌"
         liq_sweep = "YES ✅" if abs(change) > 1.4 else "NO ❌"
+        ob_zone = f"₹{round(price_val * 0.992, 2)} - ₹{round(price_val * 0.996, 2)}" if change > 0 else f"₹{round(price_val * 1.004, 2)} - ₹{round(price_val * 1.008, 2)}"
         
-        # खऱ्या हाय-लो वर आधारित Order Block
-        if change > 0:
-            ob_zone = f"₹{low_val} - ₹{round(low_val * 1.004, 2)}"
-        else:
-            ob_zone = f"₹{round(high_val * 0.996, 2)} - ₹{high_val}"
-        
+        # ४. FVG Detection: व्होलॅटिलिटीनुसार इम्बॅलन्स गॅप शोधणे
         fvg_status = "DETECTED 🔥" if abs(change) > 1.2 else "STABLE ⚖️"
 
         return {
@@ -92,8 +57,6 @@ def get_ultra_pro_data(ticker):
             "htf_sync": trend_sync, "liq_sweep": liq_sweep, "ob_zone": ob_zone, "fvg": fvg_status
         }
     except: return None
-
-# --- बाकी सर्व राऊट्स (मूळ कोडप्रमाणेच) ---
 
 @app.route('/api/pro_feed')
 def api_pro_feed():
@@ -295,6 +258,4 @@ def smc_details(symbol):
     ''', symbol=symbol)
 
 if __name__ == '__main__':
-    # Render साठी पोर्ट सेटिंग
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(debug=True)
