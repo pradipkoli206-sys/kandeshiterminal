@@ -1,0 +1,6 @@
+flask
+requests
+pytz
+gunicorn
+NorenRestApiPy
+pyotp
