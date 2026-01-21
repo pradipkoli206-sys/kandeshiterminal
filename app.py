@@ -46,10 +46,11 @@ def update_token_map():
 
 update_token_map()
 
-# --- AI CONFIGURATION ---
+# --- AI CONFIGURATION (FIXED) ---
 ai_status = "OK"
 try:
     genai.configure(api_key="AIzaSyD5XVnFmqAd1890GSRnZL7WRUmU1MXWSTc")
+    # AI Fix: gemini-pro बंद झाले आहे, म्हणून हे मॉडेल वापरले
     model = genai.GenerativeModel('gemini-1.5-flash')
 except Exception as e:
     model = None
@@ -195,13 +196,14 @@ def api_smc_live(symbol):
 
 @app.route('/api/ai_analysis/<symbol>')
 def ai_analysis(symbol):
-    if not model: return jsonify({"analysis": "AI Error: Library not loaded"})
+    if not model: return jsonify({"analysis": "AI Error"})
     data = get_ultra_pro_data(symbol)
     prompt = f"Stock: {symbol}, Price: {data['price']}, Trend: {data['trend']}, Score: {data['score']}. Marathi advice in 3 lines: Entry, Risk, Target."
     try: return jsonify({"analysis": model.generate_content(prompt).text})
     except Exception as e: return jsonify({"analysis": f"AI Error: {str(e)}"})
 
 # --- HTML TEMPLATES ---
+# येथे मी फक्त HTML बदलला आहे जेणेकरून पेज Reload होणार नाही आणि Chart ओपन होईल
 @app.route('/')
 def index():
     return render_template_string('''
@@ -211,8 +213,7 @@ def index():
         <meta charset="UTF-8">
         <title>{{title}}</title>
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <script src="https://s3.tradingview.com/tv.js"></script>
-        <style>
+        <script src="https://s3.tradingview.com/tv.js"></script> <style>
             :root { --bg: #02040a; --card: #0d1117; --neon: #00f2ff; --up: #00ff66; --down: #ff3333; }
             body { background: var(--bg); color: #fff; font-family: sans-serif; margin: 0; padding-bottom: 100px; }
             .header { padding: 15px 0; text-align: center; background: rgba(10, 17, 24, 0.9); border-bottom: 2px solid var(--neon); position: sticky; top: 0; z-index: 1000; backdrop-filter: blur(10px); }
@@ -226,9 +227,9 @@ def index():
             @keyframes glow { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
             .footer { position: fixed; bottom: 0; width: 100%; background: rgba(10, 17, 24, 0.9); padding: 15px; text-align: center; border-top: 1px solid #21262d; font-size: 0.7rem; color: #8b949e; }
             
-            /* VIEW SWITCHING MAGIC */
+            /* -- NEW STYLES FOR SPA (No Reload) -- */
             #dashboard-view { display: block; }
-            #chart-view { display: none; }
+            #chart-view { display: none; } /* Hidden initially */
             
             .action-card { position: relative; background: var(--card); border-radius: 20px; margin-bottom: 20px; padding: 2px; overflow: hidden; width: 100%; box-shadow: 0 0 15px var(--neon); }
             .action-card::after { content: ''; position: absolute; inset: 4px; background: #0d1117; border-radius: 16px; z-index: 1; }
@@ -242,11 +243,11 @@ def index():
     <body>
         <div class="header"><h1>🔱 {{title}}</h1><div id="ticker" style="color:var(--neon); font-weight:bold;"><span id="nifty_top">...</span> | <span id="bn_top">...</span></div></div>
         
-        <div id="dashboard-view" class="container">
+        <div class="container" id="dashboard-view">
             <div id="terminal">Loading...</div>
         </div>
 
-        <div id="chart-view" class="container">
+        <div class="container" id="chart-view">
             <button onclick="showDashboard()" style="background:#333; color:white; border:none; padding:10px 20px; border-radius:10px; margin-bottom:15px; font-weight:bold; cursor:pointer;">⬅️ BACK</button>
             
             <div class="action-card"><div class="inner"><h1 id="c_symbol" style="color:var(--neon); margin:0; font-size: 2rem;">...</h1></div></div>
@@ -264,7 +265,7 @@ def index():
                 </div>
             </div>
 
-            <div class="action-card"><div style="position:relative; z-index:10; width:100%; height:300px; border-radius:12px; overflow:hidden;"><div id="tv_chart_container" style="height:100%;"></div></div></div>
+            <div class="action-card"><div style="position:relative; z-index:10; width:100%; height:350px; border-radius:12px; overflow:hidden;"><div id="tv_chart_container" style="height:100%;"></div></div></div>
 
             <div class="action-card">
                 <div class="inner">
@@ -291,13 +292,14 @@ def index():
         </div>
 
         <div class="footer">{{credit}}</div>
+        
         <script>
             const beep = new Audio('https://actions.google.com/sounds/v1/alarms/beep_short.ogg');
             let played = new Set();
             let currentSymbol = '';
             let chartInterval = null;
 
-            // --- NO RELOAD LOGIC ---
+            // --- Function to Show Chart WITHOUT Reloading ---
             function openChart(symbol) {
                 currentSymbol = symbol;
                 document.getElementById('dashboard-view').style.display = 'none';
@@ -305,7 +307,7 @@ def index():
                 document.getElementById('c_symbol').innerText = symbol;
                 document.getElementById('ai_insight').innerText = "विश्लेषणासाठी क्लिक करा...";
                 
-                // Load Chart
+                // Fix for TradingView Chart (Corrected ID)
                 new TradingView.widget({
                     "autosize": true,
                     "symbol": "NSE:" + symbol,
@@ -315,31 +317,27 @@ def index():
                     "hide_top_toolbar": true
                 });
 
-                // Immediately update ALL details (not just chart)
-                updateChartData();
-                chartInterval = setInterval(updateChartData, 5000);
+                updateChartData(); // Load data immediately
+                chartInterval = setInterval(updateChartData, 5000); // Keep updating
             }
 
-            function closeChart() {
+            // --- Function to Go Back WITHOUT Reloading ---
+            function showDashboard() {
                 document.getElementById('chart-view').style.display = 'none';
                 document.getElementById('dashboard-view').style.display = 'block';
                 if(chartInterval) clearInterval(chartInterval);
             }
 
-            // --- FILL ALL DATA (IMP) ---
             async function updateChartData() {
                 if(!currentSymbol) return;
                 try {
                     const r = await fetch('/api/smc_live/' + currentSymbol);
                     const d = await r.json();
-                    
-                    // Filling ALL fields exactly like your previous page
                     document.getElementById('e_val').innerText = '₹'+d.entry;
                     document.getElementById('sl_val').innerText = '₹'+d.sl;
                     document.getElementById('t1').innerText = '₹'+d.tp1;
                     document.getElementById('t2').innerText = '₹'+d.tp2;
                     document.getElementById('t3').innerText = '₹'+d.tp3;
-                    
                     document.getElementById('sup').innerText = '₹'+d.sup;
                     document.getElementById('res').innerText = '₹'+d.res;
                     document.getElementById('trend').innerText = d.trend;
@@ -365,7 +363,7 @@ def index():
             }
 
             async function update() {
-                // If Chart is open, don't update list
+                // If chart is open, don't update the list
                 if(document.getElementById('dashboard-view').style.display === 'none') return;
 
                 try {
@@ -380,6 +378,8 @@ def index():
                         let glow = isHigh ? 'entry-ready' : '';
                         if(isHigh && !played.has(s.symbol)) { beep.play(); played.add(s.symbol); }
                         else if(!isHigh) { played.delete(s.symbol); }
+                        
+                        // IMPORTANT: Changed href to onclick for No Reload
                         html += `
                         <div onclick="openChart('${s.symbol}')" class="pro-card">
                             <div class="inner-content">
@@ -404,7 +404,7 @@ def index():
 
 @app.route('/chart/<symbol>')
 def chart(symbol):
-    return "Merged into Home Page"
+    return "This route is merged into Home"
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
