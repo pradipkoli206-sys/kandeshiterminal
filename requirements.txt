@@ -4,5 +4,6 @@ pyotp
 pandas
 pandas_ta
 google-generativeai
-requests
 gunicorn
+requests
+logzero
