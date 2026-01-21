@@ -26,6 +26,7 @@ STOCKS = [
     "SOUTHBANK", "UCOBANK", "CENTRALBK", "IDFCFIRSTB", "RTNINDIA",
     "RELIANCE", "ZOMATO", "IRFC", "TATASTEEL", "PNB"
 ]
+
 TOKEN_MAP = {} 
 
 def update_token_map():
@@ -46,15 +47,15 @@ def update_token_map():
 
 update_token_map()
 
-# --- AI CONFIGURATION (FIXED) ---
+# --- AI CONFIGURATION (Safe Mode) ---
 ai_status = "OK"
 try:
     genai.configure(api_key="AIzaSyD5XVnFmqAd1890GSRnZL7WRUmU1MXWSTc")
-    # AI Fix: gemini-pro बंद झाले आहे, म्हणून हे मॉडेल वापरले
+    # 1.5 Flash मॉडेल वापरत आहोत
     model = genai.GenerativeModel('gemini-1.5-flash')
 except Exception as e:
     model = None
-    ai_status = f"AI Error: {str(e)}"
+    ai_status = f"Setup Error: {str(e)}"
 
 # --- SMARTAPI LOGIN ---
 smartApi = None
@@ -196,14 +197,17 @@ def api_smc_live(symbol):
 
 @app.route('/api/ai_analysis/<symbol>')
 def ai_analysis(symbol):
-    if not model: return jsonify({"analysis": "AI Error"})
+    if not model: return jsonify({"analysis": f"AI Error: {ai_status}"})
     data = get_ultra_pro_data(symbol)
     prompt = f"Stock: {symbol}, Price: {data['price']}, Trend: {data['trend']}, Score: {data['score']}. Marathi advice in 3 lines: Entry, Risk, Target."
-    try: return jsonify({"analysis": model.generate_content(prompt).text})
-    except Exception as e: return jsonify({"analysis": f"AI Error: {str(e)}"})
+    try: 
+        # Attempt generation
+        response = model.generate_content(prompt)
+        return jsonify({"analysis": response.text})
+    except Exception as e: 
+        return jsonify({"analysis": f"AI Generate Error: {str(e)}"})
 
 # --- HTML TEMPLATES ---
-# येथे मी फक्त HTML बदलला आहे जेणेकरून पेज Reload होणार नाही आणि Chart ओपन होईल
 @app.route('/')
 def index():
     return render_template_string('''
@@ -213,7 +217,8 @@ def index():
         <meta charset="UTF-8">
         <title>{{title}}</title>
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <script src="https://s3.tradingview.com/tv.js"></script> <style>
+        <script src="https://s3.tradingview.com/tv.js"></script>
+        <style>
             :root { --bg: #02040a; --card: #0d1117; --neon: #00f2ff; --up: #00ff66; --down: #ff3333; }
             body { background: var(--bg); color: #fff; font-family: sans-serif; margin: 0; padding-bottom: 100px; }
             .header { padding: 15px 0; text-align: center; background: rgba(10, 17, 24, 0.9); border-bottom: 2px solid var(--neon); position: sticky; top: 0; z-index: 1000; backdrop-filter: blur(10px); }
@@ -227,9 +232,9 @@ def index():
             @keyframes glow { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
             .footer { position: fixed; bottom: 0; width: 100%; background: rgba(10, 17, 24, 0.9); padding: 15px; text-align: center; border-top: 1px solid #21262d; font-size: 0.7rem; color: #8b949e; }
             
-            /* -- NEW STYLES FOR SPA (No Reload) -- */
+            /* -- SPA STYLES (NO RELOAD) -- */
             #dashboard-view { display: block; }
-            #chart-view { display: none; } /* Hidden initially */
+            #chart-view { display: none; }
             
             .action-card { position: relative; background: var(--card); border-radius: 20px; margin-bottom: 20px; padding: 2px; overflow: hidden; width: 100%; box-shadow: 0 0 15px var(--neon); }
             .action-card::after { content: ''; position: absolute; inset: 4px; background: #0d1117; border-radius: 16px; z-index: 1; }
@@ -299,7 +304,7 @@ def index():
             let currentSymbol = '';
             let chartInterval = null;
 
-            // --- Function to Show Chart WITHOUT Reloading ---
+            // --- SPA LOGIC (NO RELOAD) ---
             function openChart(symbol) {
                 currentSymbol = symbol;
                 document.getElementById('dashboard-view').style.display = 'none';
@@ -307,21 +312,25 @@ def index():
                 document.getElementById('c_symbol').innerText = symbol;
                 document.getElementById('ai_insight').innerText = "विश्लेषणासाठी क्लिक करा...";
                 
-                // Fix for TradingView Chart (Corrected ID)
+                // --- TRADINGVIEW FIX (Added Locale: "in") ---
                 new TradingView.widget({
                     "autosize": true,
-                    "symbol": "NSE:" + symbol,
+                    "symbol": "NSE:" + symbol, 
                     "interval": "15",
+                    "timezone": "Asia/Kolkata",
                     "theme": "dark",
-                    "container_id": "tv_chart_container",
-                    "hide_top_toolbar": true
+                    "style": "1",
+                    "locale": "in", // IMPORTANT: Fixes the "Symbol not found" error for Indian Stocks
+                    "toolbar_bg": "#f1f3f6",
+                    "enable_publishing": false,
+                    "hide_top_toolbar": true,
+                    "container_id": "tv_chart_container"
                 });
 
-                updateChartData(); // Load data immediately
-                chartInterval = setInterval(updateChartData, 5000); // Keep updating
+                updateChartData();
+                chartInterval = setInterval(updateChartData, 5000);
             }
 
-            // --- Function to Go Back WITHOUT Reloading ---
             function showDashboard() {
                 document.getElementById('chart-view').style.display = 'none';
                 document.getElementById('dashboard-view').style.display = 'block';
@@ -363,7 +372,6 @@ def index():
             }
 
             async function update() {
-                // If chart is open, don't update the list
                 if(document.getElementById('dashboard-view').style.display === 'none') return;
 
                 try {
@@ -376,10 +384,8 @@ def index():
                         let isHigh = s.score >= 85 && s.is_stable;
                         let candleColor = s.score >= 80 ? 'var(--up)' : 'var(--down)';
                         let glow = isHigh ? 'entry-ready' : '';
-                        if(isHigh && !played.has(s.symbol)) { beep.play(); played.add(s.symbol); }
-                        else if(!isHigh) { played.delete(s.symbol); }
                         
-                        // IMPORTANT: Changed href to onclick for No Reload
+                        // ONCLICK Function (No Page Reload)
                         html += `
                         <div onclick="openChart('${s.symbol}')" class="pro-card">
                             <div class="inner-content">
@@ -404,7 +410,7 @@ def index():
 
 @app.route('/chart/<symbol>')
 def chart(symbol):
-    return "This route is merged into Home"
+    return "Merged into Home Page"
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
