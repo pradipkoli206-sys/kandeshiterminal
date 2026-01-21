@@ -50,9 +50,9 @@ update_token_map()
 # --- AI CONFIGURATION (Safe Mode) ---
 ai_status = "OK"
 try:
-    genai.configure(api_key="AIzaSyD5XVnFmqAd1890GSRnZL7WRUmU1MXWSTc")
+    genai.configure(api_key="AIzaSyDOfrHa_rT9q2sjLIPhkTNnr0y9zFx9Mb0")
     # 1.5 Flash मॉडेल वापरत आहोत
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-3-flash-preview')
 except Exception as e:
     model = None
     ai_status = f"Setup Error: {str(e)}"
