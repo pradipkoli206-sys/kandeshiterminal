@@ -12,15 +12,15 @@ import pandas_ta as ta
 
 app = Flask(__name__)
 
-# --- 1. CONFIGURATION ---
-API_KEY = "तुमची_API_KEY_टाका"
-CLIENT_ID = "तुमचा_CLIENT_ID_टाका"
-PASSWORD = "तुमचा_PIN_टाका"
-TOTP_SECRET = "तुमचा_TOTP_SECRET_टाका"
+# --- 1. CONFIGURATION (Environment Variables मधून डेटा घेणे) ---
+API_KEY = os.environ.get('API_KEY')
+CLIENT_ID = os.environ.get('CLIENT_ID')
+PASSWORD = os.environ.get('PASSWORD')
+TOTP_SECRET = os.environ.get('TOTP_SECRET')
 
 # --- WHATSAPP CONFIGURATION ---
-WHATSAPP_PHONE = "+91XXXXXXXXXX"
-WHATSAPP_API_KEY = "XXXXXX"
+WHATSAPP_PHONE = os.environ.get('WHATSAPP_PHONE', '+91XXXXXXXXXX')
+WHATSAPP_API_KEY = os.environ.get('WHATSAPP_API_KEY', 'XXXXXX')
 
 # --- STOCK TOKENS ---
 TOKEN_MAP = {
@@ -330,141 +330,4 @@ def index():
                         if(isHigh && !played.has(s.symbol)) { beep.play(); played.add(s.symbol); }
                         else if(!isHigh) { played.delete(s.symbol); }
                         html += `
-                        <a href="/chart/${s.symbol}" class="pro-card">
-                            <div class="inner-content">
-                                <div><span style="font-size:0.8rem; color:#8b949e; font-weight:bold;">${s.symbol}</span><div style="font-size:1.6rem; font-weight:900; color:var(--neon);">₹${s.price}</div></div>
-                                <div class="score-circle ${glow}"><b style="font-size:1.1rem;">${s.score}%</b><span style="font-size:0.5rem; font-weight:bold;">${s.dir}</span></div>
-                                <div style="display:flex; align-items:flex-end; gap:2px; height:45px;">
-                                    <div class="c-bar" style="height:25px; background:${candleColor}"></div>
-                                    <div class="c-bar" style="height:35px; background:${candleColor}"></div>
-                                    <div class="c-bar" style="height:30px; background:${candleColor}"></div>
-                                </div>
-                            </div>
-                        </a>`;
-                    });
-                    document.getElementById('terminal').innerHTML = html;
-                } catch(e) {}
-            }
-            setInterval(update, 5000); update();
-        </script>
-    </body>
-    </html>
-    ''', title="कान्हादेशी ट्रेडर: MTF Mode", credit="POWERED BY ANGEL ONE & CALLMEBOT")
-
-@app.route('/chart/<symbol>')
-def chart(symbol):
-    return render_template_string('''
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="UTF-8">
-        <title>{{symbol}} Analysis</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>
-            :root { --bg: #02040a; --card: #0d1117; --neon: #00f2ff; --up: #00ff66; --down: #ff3333; }
-            body { background: var(--bg); color: #fff; font-family: sans-serif; margin: 0; padding: 15px; padding-top: 70px; display: flex; flex-direction: column; align-items: center; }
-            .action-card { position: relative; background: var(--card); border-radius: 20px; margin-bottom: 20px; padding: 2px; overflow: hidden; width: 100%; max-width: 420px; box-shadow: 0 0 15px var(--neon); }
-            .action-card::after { content: ''; position: absolute; inset: 4px; background: #0d1117; border-radius: 16px; z-index: 1; }
-            .inner { position: relative; z-index: 10; padding: 15px; text-align: center; }
-            .p-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; text-align: left; }
-            .p-item { background: rgba(0,242,255,0.05); padding: 8px; border-radius: 8px; border: 1px solid #21262d; }
-            .p-label { font-size: 0.55rem; color: #8b949e; display: block; text-transform: uppercase; font-weight: bold; }
-            .p-val { font-size: 0.85rem; color: var(--neon); font-weight: 900; }
-        </style>
-    </head>
-    <body>
-        <div style="position: absolute; top: 20px; left: 20px;"><a href="/" style="color:#8b949e; text-decoration:none; font-weight:bold;">⬅️ BACK</a></div>
-        <div class="action-card"><div class="inner"><h1 style="color:var(--neon); margin:0; font-size: 2rem;">{{symbol}}</h1></div></div>
-
-        <div class="action-card">
-            <div class="inner">
-                <span style="color: var(--neon); font-weight: bold; font-size: 0.8rem;">🎯 ENTRY PLAN (BUY)</span>
-                <div class="p-grid">
-                    <div class="p-item"><span class="p-label">Entry Price</span><span class="p-val" id="e_val">₹0</span></div>
-                    <div class="p-item"><span class="p-label">Stop Loss (SL)</span><span class="p-val" id="sl_val" style="color:var(--down);">₹0</span></div>
-                    <div class="p-item"><span class="p-label">T1 (Safe)</span><span class="p-val" id="t1" style="color:var(--up);">₹0</span></div>
-                    <div class="p-item"><span class="p-label">T2 (Pro)</span><span class="p-val" id="t2" style="color:var(--up);">₹0</span></div>
-                    <div class="p-item" style="grid-column: span 2;"><span class="p-label">T3 (Jackpot)</span><span class="p-val" id="t3" style="color:var(--up);">₹0</span></div>
-                </div>
-            </div>
-        </div>
-
-        <div class="action-card"><div style="position:relative; z-index:10; width:100%; height:280px; border-radius:12px; overflow:hidden;"><div id="tv_chart" style="height:100%;"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({"autosize": true, "symbol": "NSE:{{symbol}}", "interval": "15", "theme": "dark", "container_id": "tv_chart", "hide_top_toolbar": true});</script></div></div>
-
-        <div class="action-card">
-            <div class="inner">
-                <span style="color: var(--neon); font-weight: bold; font-size: 0.8rem;">📊 SMC TECHNICAL DETAILS</span>
-                <div class="p-grid">
-                    <div class="p-item"><span class="p-label">1. Support</span><span class="p-val" id="sup">₹0</span></div>
-                    <div class="p-item"><span class="p-label">2. Resist.</span><span class="p-val" id="res">₹0</span></div>
-                    <div class="p-item"><span class="p-label">3. Trend</span><span class="p-val" id="trend">--</span></div>
-                    <div class="p-item"><span class="p-label">4. Order Block</span><span class="p-val" id="ob">--</span></div>
-                    <div class="p-item"><span class="p-label">5. FVG Status</span><span class="p-val" id="fvg">--</span></div>
-                    <div class="p-item"><span class="p-label">6. SL Hunting</span><span class="p-val" id="slh">--</span></div>
-                    <div class="p-item"><span class="p-label">7. Liq. Sweep</span><span class="p-val" id="liq">--</span></div>
-                    <div class="p-item"><span class="p-label">8. Breakout</span><span class="p-val" id="brk">--</span></div>
-                    <div class="p-item"><span class="p-label">9. Vol Spike</span><span class="p-val" id="vol">--</span></div>
-                    <div class="p-item"><span class="p-label">10. MTF Conf.</span><span class="p-val" id="mtf">--</span></div>
-                    <div class="p-item"><span class="p-label">11. Correlation</span><span class="p-val" id="corr">--</span></div>
-                    <div class="p-item"><span class="p-label">12. Vol @ Price</span><span class="p-val" id="vap">--</span></div>
-                    <div class="p-item" style="grid-column: span 2; border: 1px solid var(--down);"><span class="p-label">13. Trap Analysis</span><span class="p-val" id="trap" style="color:var(--down);">--</span></div>
-                </div>
-                <hr style="border: 0.5px solid #21262d; margin-top: 15px;">
-                <span style="color: var(--up); font-weight: bold; font-size: 0.7rem;">⚙️ SEQUENCE OF LOGIC</span>
-                <div class="p-grid" style="grid-template-columns: 1fr;">
-                    <div class="p-item" style="padding: 5px;"><span class="p-label" style="display:inline;">1. Scanning: </span><span class="p-val" id="s1" style="font-size:0.7rem;">...</span></div>
-                    <div class="p-item" style="padding: 5px;"><span class="p-label" style="display:inline;">2. Filtering: </span><span class="p-val" id="s2" style="font-size:0.7rem;">...</span></div>
-                    <div class="p-item" style="padding: 5px;"><span class="p-label" style="display:inline;">3. Confirmation: </span><span class="p-val" id="s3" style="font-size:0.7rem;">...</span></div>
-                    <div class="p-item" style="padding: 5px;"><span class="p-label" style="display:inline;">4. Trap Check: </span><span class="p-val" id="s4" style="font-size:0.7rem;">...</span></div>
-                    <div class="p-item" style="padding: 5px;"><span class="p-label" style="display:inline;">5. Action: </span><span class="p-val" id="s5" style="font-size:0.7rem; color:var(--up);">...</span></div>
-                </div>
-            </div>
-        </div>
-
-        <div class="action-card" onclick="fetchAI()" style="cursor:pointer;"><div class="inner"><span style="color: var(--neon); font-weight: bold; font-size: 0.8rem;">🤖 AI INSIGHT</span><div id="ai_insight" style="font-size: 0.85rem; color: var(--neon); margin-top: 10px; font-weight: bold;">विश्लेषणासाठी क्लिक करा...</div></div></div>
-
-        <div class="action-card"><div class="inner" style="text-align: left;"><span style="color: #ff3333; font-weight: bold; font-size: 0.7rem;">🛡️ RISK & TRADE LOCK</span><div style="display: flex; justify-content: space-between; margin-top: 10px; font-size: 0.8rem;"><div class="p-item" style="width:45%;"><span class="p-label">Daily Trades</span><b style="color:var(--neon);">0 / 2</b></div><div class="p-item" style="width:45%;"><span class="p-label">Max Loss</span><b style="color:var(--down);">₹150</b></div></div></div></div>
-
-        <div class="action-card"><div class="inner" style="text-align: left;"><span style="color: #8b949e; font-weight: bold; font-size: 0.7rem;">📊 SIGNAL HISTORY (LAST 30 DAYS)</span><div style="margin-top: 10px; font-size: 0.8rem;"><div style="display:flex; justify-content:space-between; padding:5px; border-bottom:1px solid #21262d;"><span style="color:#8b949e;">Win Rate</span><b style="color:var(--up);">78%</b></div><div style="display:flex; justify-content:space-between; padding:5px;"><span style="color:#8b949e;">Alerts (Today)</span><b id="alerts_count" style="color:var(--neon);">0</b></div></div></div></div>
-
-        <script>
-            async function fetchAI() { document.getElementById('ai_insight').innerText = " विचार करत आहे... 🤔"; const r = await fetch('/api/ai_analysis/{{symbol}}'); const d = await r.json(); document.getElementById('ai_insight').innerText = d.analysis; }
-            async function updateLive() {
-                try {
-                    const r = await fetch('/api/smc_live/{{symbol}}');
-                    const d = await r.json();
-                    document.getElementById('e_val').innerText = '₹'+d.entry;
-                    document.getElementById('sl_val').innerText = '₹'+d.sl;
-                    document.getElementById('t1').innerText = '₹'+d.tp1;
-                    document.getElementById('t2').innerText = '₹'+d.tp2;
-                    document.getElementById('t3').innerText = '₹'+d.tp3;
-                    document.getElementById('sup').innerText = '₹'+d.sup;
-                    document.getElementById('res').innerText = '₹'+d.res;
-                    document.getElementById('trend').innerText = d.trend;
-                    document.getElementById('ob').innerText = d.ob;
-                    document.getElementById('fvg').innerText = d.fvg;
-                    document.getElementById('slh').innerText = d.slh;
-                    document.getElementById('liq').innerText = d.liq;
-                    document.getElementById('brk').innerText = d.brk;
-                    document.getElementById('vol').innerText = d.vol;
-                    document.getElementById('mtf').innerText = d.mtf;
-                    document.getElementById('corr').innerText = d.corr;
-                    document.getElementById('vap').innerText = d.vap;
-                    document.getElementById('trap').innerText = d.trap;
-                    document.getElementById('s1').innerText = d.s1;
-                    document.getElementById('s2').innerText = d.s2;
-                    document.getElementById('s3').innerText = d.s3;
-                    document.getElementById('s4').innerText = d.s4;
-                    document.getElementById('s5').innerText = d.s5;
-                    document.getElementById('alerts_count').innerText = d.alerts;
-                } catch(e){}
-            }
-            setInterval(updateLive, 5000); updateLive();
-        </script>
-    </body>
-    </html>
-    ''', symbol=symbol)
-
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+                        <a href="/chart/${s.symbol}" class
