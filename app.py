@@ -22,20 +22,34 @@ TOTP_SECRET = os.environ.get('TOTP_SECRET')
 WHATSAPP_PHONE = os.environ.get('WHATSAPP_PHONE', '+91XXXXXXXXXX')
 WHATSAPP_API_KEY = os.environ.get('WHATSAPP_API_KEY', 'XXXXXX')
 
-# --- STOCK TOKENS ---
-TOKEN_MAP = {
-    "SOUTHBANK": "4259",
-    "UCOBANK": "11287",
-    "CENTRALBK": "6092",
-    "IDFCFIRSTB": "11184",
-    "RTNINDIA": "13917",
-    "RELIANCE": "2885",
-    "ZOMATO": "5097",
-    "IRFC": "265",
-    "TATASTEEL": "3499",
-    "PNB": "10666"
-}
-STOCKS = list(TOKEN_MAP.keys())
+# --- STOCK CONFIGURATION (Automatic Token Fetching) ---
+STOCKS = [
+    "SOUTHBANK", "UCOBANK", "CENTRALBK", "IDFCFIRSTB", "RTNINDIA",
+    "RELIANCE", "ZOMATO", "IRFC", "TATASTEEL", "PNB"
+]
+
+TOKEN_MAP = {} 
+
+def update_token_map():
+    global TOKEN_MAP
+    try:
+        print("⏳ Downloading Latest Token List from Angel One...")
+        url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
+        response = requests.get(url)
+        data = response.json()
+        
+        for item in data:
+            if item['exch_seg'] == 'NSE' and item['symbol'].endswith('-EQ'):
+                symbol_name = item['symbol'].split('-')[0]
+                if symbol_name in STOCKS:
+                    TOKEN_MAP[symbol_name] = item['token']
+        
+        print("✅ Tokens Updated Successfully!")
+        print(TOKEN_MAP) 
+    except Exception as e:
+        print(f"❌ Error fetching tokens: {e}")
+
+update_token_map()
 
 # --- AI CONFIGURATION ---
 ai_status = "OK"
@@ -124,10 +138,9 @@ def calculate_technical_score(df, current_price):
     elif current_rsi < 30:
         score += 20 
 
-    # Score Clamping 0-100 (पण हे नंतर MTF ने ॲडजस्ट होईल)
     return int(score), trend, 0, round(current_rsi, 1)
 
-# --- MAIN LOGIC (UPDATED FOR MULTI-TIMEFRAME) ---
+# --- MAIN LOGIC ---
 history = {}
 sent_alerts = {} 
 
@@ -137,51 +150,46 @@ def get_ultra_pro_data(ticker):
         if smartApi is None: angel_login()
         token = TOKEN_MAP.get(ticker)
         
-        # 1. Fetch 15 Minute Data (Primary)
+        if not token:
+            print(f"Token not found for {ticker}")
+            return None
+
         df_15m = fetch_candle_data(token, interval="FIFTEEN_MINUTE", days=5)
-        
-        # 2. Fetch 1 Hour Data (Secondary - For MTF Confirmation)
-        # 1 तासाच्या EMA 50 साठी जास्त दिवस लागतात (उदा. 15 दिवस)
         df_1h = fetch_candle_data(token, interval="ONE_HOUR", days=20)
 
-        # Basic Price
         if df_15m is not None:
             price = df_15m['close'].iloc[-1]
         else:
-            ltp_data = smartApi.ltpData("NSE", f"{ticker}-EQ", token)
-            price = ltp_data['data']['ltp']
+            try:
+                ltp_data = smartApi.ltpData("NSE", f"{ticker}-EQ", token)
+                price = ltp_data['data']['ltp']
+            except:
+                return None
         
-        # 3. Calculate 15m Score
         score, trend, _, rsi_val = calculate_technical_score(df_15m, price)
         
-        # 4. --- MULTI-TIMEFRAME LOGIC START ---
         mtf_msg = "NEUTRAL"
         mtf_bonus = 0
         
         if df_1h is not None and len(df_1h) > 50:
-            # Hourly EMA Calculation
             df_1h['ema_50'] = df_1h.ta.ema(length=50)
             hourly_ema = df_1h['ema_50'].iloc[-1]
             hourly_trend = "BULLISH" if price > hourly_ema else "BEARISH"
             
-            # Comparison (15m vs 1H)
             if "BULLISH" in trend and hourly_trend == "BULLISH":
-                mtf_bonus = 10  # दोघांचे एकमत (Strong Buy)
+                mtf_bonus = 10 
                 mtf_msg = "ALIGNED 🚀"
             elif "BEARISH" in trend and hourly_trend == "BEARISH":
-                mtf_bonus = 10  # दोघांचे एकमत (Strong Sell)
+                mtf_bonus = 10
                 mtf_msg = "ALIGNED 🔻"
             else:
-                mtf_bonus = -15 # भांडण आहे (Trap Zone)
+                mtf_bonus = -15
                 mtf_msg = "CONFLICT ⚠️"
         
-        # Final Score Adjustment
         score += mtf_bonus
         final_score = max(5, min(99, score))
         alerts_count = 1 if final_score > 80 else 0
-        # --- MULTI-TIMEFRAME LOGIC END ---
 
-        # Stability
         if ticker not in history:
             history[ticker] = {'val': final_score, 'stable': 0, 'dir': '●'}
         else:
@@ -193,7 +201,6 @@ def get_ultra_pro_data(ticker):
             elif final_score < prev: history[ticker]['dir'] = "↓"
             history[ticker]['val'] = final_score
 
-        # WhatsApp Trigger
         today_date = datetime.now().strftime("%Y-%m-%d")
         alert_key = f"{ticker}_{today_date}"
         if final_score >= 85 and history[ticker]['stable'] >= 1:
@@ -201,7 +208,6 @@ def get_ultra_pro_data(ticker):
                 send_whatsapp_alert(ticker, final_score, price, trend)
                 sent_alerts[alert_key] = True 
         
-        # Levels
         sl_val = price * 0.99
         tp1 = price * 1.015
         tp2 = price * 1.025
@@ -209,7 +215,7 @@ def get_ultra_pro_data(ticker):
         
         s1 = "DONE ✅"
         s2 = f"RSI: {rsi_val}"
-        s3 = mtf_msg # इथे MTF चे स्टेटस दिसेल
+        s3 = mtf_msg 
         s4 = "NO TRAP ✅" if mtf_bonus >= 0 else "TRAP ALERT ⚠️"
         s5 = "ACTIVATE 🔥" if final_score > 80 else "WATCHING 👀"
 
@@ -234,7 +240,7 @@ def get_ultra_pro_data(ticker):
             "liq": "SWEEP 🧹" if rsi_val < 30 else "NO",
             "brk": "POSSIBLE" if final_score > 70 else "NO",
             "vol": "HIGH" if final_score > 80 else "AVG",
-            "mtf": mtf_msg, # New MTF Field
+            "mtf": mtf_msg,
             "corr": "POSITIVE",
             "vap": f"₹{round(price, 2)}", 
             "trap": "CHECKING...",
