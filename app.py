@@ -12,42 +12,37 @@ import pandas_ta as ta
 
 app = Flask(__name__)
 
-# --- 1. CONFIGURATION (Environment Variables मधून डेटा घेणे) ---
+# --- 1. CONFIGURATION ---
 API_KEY = os.environ.get('API_KEY')
 CLIENT_ID = os.environ.get('CLIENT_ID')
 PASSWORD = os.environ.get('PASSWORD')
 TOTP_SECRET = os.environ.get('TOTP_SECRET')
 
-# --- WHATSAPP CONFIGURATION ---
 WHATSAPP_PHONE = os.environ.get('WHATSAPP_PHONE', '+91XXXXXXXXXX')
 WHATSAPP_API_KEY = os.environ.get('WHATSAPP_API_KEY', 'XXXXXX')
 
-# --- STOCK CONFIGURATION (Automatic Token Fetching) ---
+# --- STOCK CONFIGURATION ---
 STOCKS = [
     "SOUTHBANK", "UCOBANK", "CENTRALBK", "IDFCFIRSTB", "RTNINDIA",
     "RELIANCE", "ZOMATO", "IRFC", "TATASTEEL", "PNB"
 ]
-
 TOKEN_MAP = {} 
 
 def update_token_map():
     global TOKEN_MAP
     try:
-        print("⏳ Downloading Latest Token List from Angel One...")
+        print("⏳ Downloading Tokens...")
         url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
         response = requests.get(url)
         data = response.json()
-        
         for item in data:
             if item['exch_seg'] == 'NSE' and item['symbol'].endswith('-EQ'):
                 symbol_name = item['symbol'].split('-')[0]
                 if symbol_name in STOCKS:
                     TOKEN_MAP[symbol_name] = item['token']
-        
-        print("✅ Tokens Updated Successfully!")
-        print(TOKEN_MAP) 
+        print("✅ Tokens Updated!")
     except Exception as e:
-        print(f"❌ Error fetching tokens: {e}")
+        print(f"❌ Error: {e}")
 
 update_token_map()
 
@@ -68,26 +63,20 @@ def angel_login():
         smartApi = SmartConnect(api_key=API_KEY)
         totp = pyotp.TOTP(TOTP_SECRET).now()
         data = smartApi.generateSession(CLIENT_ID, PASSWORD, totp)
-        if data['status']:
-            print("Angel One Login Successful! ✅")
-            return True
-        else:
-            print(f"Login Failed: {data['message']}")
-            return False
-    except Exception as e:
-        print(f"Connection Error: {e}")
+        return data['status']
+    except Exception:
         return False
 
 angel_login()
 
-# --- WHATSAPP FUNCTION ---
+# --- WHATSAPP ---
 def send_whatsapp_alert(symbol, score, price, trend):
     try:
-        message = f"🚨 *High Alert: {symbol}*\n🔥 Score: {score}/100\n💰 Price: ₹{price}\n📈 Trend: {trend}\n\n_Sent by Kanhadeshi Trader_"
+        message = f"🚨 *{symbol} Alert*\nScore: {score}\nPrice: {price}\nTrend: {trend}"
         encoded_msg = urllib.parse.quote(message)
         url = f"https://api.callmebot.com/whatsapp.php?phone={WHATSAPP_PHONE}&text={encoded_msg}&apikey={WHATSAPP_API_KEY}"
         requests.get(url, timeout=5)
-    except Exception: pass
+    except: pass
 
 # --- DATA FUNCTIONS ---
 def fetch_candle_data(token, interval="FIFTEEN_MINUTE", days=5):
@@ -96,9 +85,7 @@ def fetch_candle_data(token, interval="FIFTEEN_MINUTE", days=5):
         todate = datetime.now()
         fromdate = todate - timedelta(days=days)
         params = {
-            "exchange": "NSE",
-            "symboltoken": token,
-            "interval": interval,
+            "exchange": "NSE", "symboltoken": token, "interval": interval,
             "fromdate": fromdate.strftime("%Y-%m-%d %H:%M"),
             "todate": todate.strftime("%Y-%m-%d %H:%M")
         }
@@ -107,37 +94,26 @@ def fetch_candle_data(token, interval="FIFTEEN_MINUTE", days=5):
             df = pd.DataFrame(data['data'], columns=["timestamp", "open", "high", "low", "close", "volume"])
             df['close'] = df['close'].astype(float)
             return df
-    except Exception as e:
-        print(f"Candle Data Error: {e}")
+    except: return None
     return None
 
 def calculate_technical_score(df, current_price):
-    if df is None or len(df) < 20:
-        return 50, "WAITING", 0, "NEUTRAL"
-
+    if df is None or len(df) < 20: return 50, "WAITING", 0, "NEUTRAL"
     df['rsi'] = df.ta.rsi(length=14)
     current_rsi = df['rsi'].iloc[-1]
-    
     df['ema_50'] = df.ta.ema(length=50)
     current_ema = df['ema_50'].iloc[-1] if pd.notna(df['ema_50'].iloc[-1]) else current_price
-
     score = 50
     trend = "SIDEWAYS"
-    
     if current_price > current_ema:
         score += 10
         trend = "BULLISH 🚀"
     else:
         score -= 10
         trend = "BEARISH 📉"
-
-    if 30 <= current_rsi <= 45 and trend == "BULLISH 🚀":
-        score += 30 
-    elif current_rsi > 70:
-        score -= 20 
-    elif current_rsi < 30:
-        score += 20 
-
+    if 30 <= current_rsi <= 45 and trend == "BULLISH 🚀": score += 30 
+    elif current_rsi > 70: score -= 20 
+    elif current_rsi < 30: score += 20 
     return int(score), trend, 0, round(current_rsi, 1)
 
 # --- MAIN LOGIC ---
@@ -149,109 +125,61 @@ def get_ultra_pro_data(ticker):
     try:
         if smartApi is None: angel_login()
         token = TOKEN_MAP.get(ticker)
-        
-        if not token:
-            print(f"Token not found for {ticker}")
-            return None
+        if not token: return None
 
         df_15m = fetch_candle_data(token, interval="FIFTEEN_MINUTE", days=5)
         df_1h = fetch_candle_data(token, interval="ONE_HOUR", days=20)
 
-        if df_15m is not None:
-            price = df_15m['close'].iloc[-1]
+        if df_15m is not None: price = df_15m['close'].iloc[-1]
         else:
             try:
-                ltp_data = smartApi.ltpData("NSE", f"{ticker}-EQ", token)
-                price = ltp_data['data']['ltp']
-            except:
-                return None
+                ltp = smartApi.ltpData("NSE", f"{ticker}-EQ", token)
+                price = ltp['data']['ltp']
+            except: return None
         
         score, trend, _, rsi_val = calculate_technical_score(df_15m, price)
         
         mtf_msg = "NEUTRAL"
         mtf_bonus = 0
-        
         if df_1h is not None and len(df_1h) > 50:
             df_1h['ema_50'] = df_1h.ta.ema(length=50)
-            hourly_ema = df_1h['ema_50'].iloc[-1]
-            hourly_trend = "BULLISH" if price > hourly_ema else "BEARISH"
-            
-            if "BULLISH" in trend and hourly_trend == "BULLISH":
-                mtf_bonus = 10 
-                mtf_msg = "ALIGNED 🚀"
-            elif "BEARISH" in trend and hourly_trend == "BEARISH":
-                mtf_bonus = 10
-                mtf_msg = "ALIGNED 🔻"
-            else:
-                mtf_bonus = -15
-                mtf_msg = "CONFLICT ⚠️"
+            h_ema = df_1h['ema_50'].iloc[-1]
+            h_trend = "BULLISH" if price > h_ema else "BEARISH"
+            if "BULLISH" in trend and h_trend == "BULLISH": mtf_bonus = 10; mtf_msg = "ALIGNED 🚀"
+            elif "BEARISH" in trend and h_trend == "BEARISH": mtf_bonus = 10; mtf_msg = "ALIGNED 🔻"
+            else: mtf_bonus = -15; mtf_msg = "CONFLICT ⚠️"
         
         score += mtf_bonus
         final_score = max(5, min(99, score))
         alerts_count = 1 if final_score > 80 else 0
 
-        if ticker not in history:
-            history[ticker] = {'val': final_score, 'stable': 0, 'dir': '●'}
+        if ticker not in history: history[ticker] = {'val': final_score, 'stable': 0, 'dir': '●'}
         else:
             prev = history[ticker]['val']
             if final_score >= 85 and prev >= 85: history[ticker]['stable'] += 1
             else: history[ticker]['stable'] = 0
-            
-            if final_score > prev: history[ticker]['dir'] = "↑"
-            elif final_score < prev: history[ticker]['dir'] = "↓"
+            history[ticker]['dir'] = "↑" if final_score > prev else ("↓" if final_score < prev else "●")
             history[ticker]['val'] = final_score
 
-        today_date = datetime.now().strftime("%Y-%m-%d")
-        alert_key = f"{ticker}_{today_date}"
+        today = datetime.now().strftime("%Y-%m-%d")
         if final_score >= 85 and history[ticker]['stable'] >= 1:
-            if alert_key not in sent_alerts:
+            if f"{ticker}_{today}" not in sent_alerts:
                 send_whatsapp_alert(ticker, final_score, price, trend)
-                sent_alerts[alert_key] = True 
+                sent_alerts[f"{ticker}_{today}"] = True 
         
-        sl_val = price * 0.99
-        tp1 = price * 1.015
-        tp2 = price * 1.025
-        tp3 = price * 1.04
-        
-        s1 = "DONE ✅"
-        s2 = f"RSI: {rsi_val}"
-        s3 = mtf_msg 
-        s4 = "NO TRAP ✅" if mtf_bonus >= 0 else "TRAP ALERT ⚠️"
-        s5 = "ACTIVATE 🔥" if final_score > 80 else "WATCHING 👀"
-
         return {
-            "symbol": ticker, 
-            "price": "{:.2f}".format(price), 
-            "score": final_score, 
-            "dir": history[ticker]['dir'], 
-            "is_stable": history[ticker]['stable'] >= 1,
-            "entry": "{:.2f}".format(price), 
-            "sl": "{:.2f}".format(sl_val),
-            "tp1": "{:.2f}".format(tp1), 
-            "tp2": "{:.2f}".format(tp2), 
-            "tp3": "{:.2f}".format(tp3),
-            "rr": "1:2.5",
-            "sup": "{:.2f}".format(price * 0.98), 
-            "res": "{:.2f}".format(price * 1.02),
-            "trend": trend,
-            "ob": f"₹{round(price * 0.99, 2)}", 
-            "fvg": "DETECTED ⚡" if final_score > 75 else "NONE",
-            "slh": "SAFE 🟢",
-            "liq": "SWEEP 🧹" if rsi_val < 30 else "NO",
-            "brk": "POSSIBLE" if final_score > 70 else "NO",
-            "vol": "HIGH" if final_score > 80 else "AVG",
-            "mtf": mtf_msg,
-            "corr": "POSITIVE",
-            "vap": f"₹{round(price, 2)}", 
-            "trap": "CHECKING...",
-            "s1": s1, "s2": s2, "s3": s3, "s4": s4, "s5": s5,
-            "nifty_top": "NIFTY: LIVE",
-            "bn_top": "BANKNIFTY: LIVE",
-            "alerts": str(alerts_count)
+            "symbol": ticker, "price": "{:.2f}".format(price), "score": final_score, 
+            "dir": history[ticker]['dir'], "is_stable": history[ticker]['stable'] >= 1,
+            "entry": "{:.2f}".format(price), "sl": "{:.2f}".format(price*0.99),
+            "tp1": "{:.2f}".format(price*1.015), "tp2": "{:.2f}".format(price*1.025), "tp3": "{:.2f}".format(price*1.04),
+            "sup": "{:.2f}".format(price*0.98), "res": "{:.2f}".format(price*1.02),
+            "trend": trend, "ob": f"₹{round(price*0.99, 2)}", "fvg": "YES" if final_score > 75 else "NO",
+            "slh": "SAFE", "liq": "YES" if rsi_val < 30 else "NO", "brk": "YES" if final_score > 70 else "NO",
+            "vol": "HIGH" if final_score > 80 else "AVG", "mtf": mtf_msg, "corr": "POS", "vap": f"₹{round(price, 2)}", 
+            "trap": "CHECK", "s1": "OK", "s2": f"RSI:{rsi_val}", "s3": mtf_msg, "s4": "NO TRAP", 
+            "s5": "BUY" if final_score > 80 else "WATCH", "nifty": "NIFTY: LIVE", "bn": "BN: LIVE", "alerts": str(alerts_count)
         }
-    except Exception as e:
-        print(f"Error {ticker}: {e}")
-        return None
+    except: return None
 
 # --- ROUTES ---
 @app.route('/api/pro_feed')
@@ -267,28 +195,11 @@ def api_smc_live(symbol):
 
 @app.route('/api/ai_analysis/<symbol>')
 def ai_analysis(symbol):
+    if not model: return jsonify({"analysis": "AI Error: Library not loaded"})
     data = get_ultra_pro_data(symbol)
-    if ai_status != "OK": return jsonify({"analysis": f"CRITICAL ERROR: {ai_status}"})
-    if not model: return jsonify({"analysis": "Library Error."})
-
-    prompt = f"""
-    तुम्ही एक SMC (Smart Money Concept) तज्ञ आहात.
-    स्टॉक: {symbol}
-    किंमत: {data['price']}
-    ट्रेंड: {data['trend']}
-    MTF (Multi Timeframe): {data['mtf']}
-    SMC Score: {data['score']}/100.
-    
-    मला मराठीत थोडक्यात सांगा:
-    1. आता Buy करावे का? (Entry)
-    2. धोका काय आहे? (Risk)
-    3. टार्गेट काय ठेवावे?
-    """
-    try:
-        response = model.generate_content(prompt)
-        return jsonify({"analysis": response.text})
-    except Exception as e:
-        return jsonify({"analysis": f"API Error: {str(e)}"})
+    prompt = f"Stock: {symbol}, Price: {data['price']}, Trend: {data['trend']}, Score: {data['score']}. Marathi advice in 3 lines: Entry, Risk, Target."
+    try: return jsonify({"analysis": model.generate_content(prompt).text})
+    except Exception as e: return jsonify({"analysis": f"AI Error: {str(e)}"})
 
 # --- HTML TEMPLATES ---
 @app.route('/')
@@ -300,12 +211,13 @@ def index():
         <meta charset="UTF-8">
         <title>{{title}}</title>
         <meta name="viewport" content="width=device-width, initial-scale=1">
+        <script src="https://s3.tradingview.com/tv.js"></script>
         <style>
             :root { --bg: #02040a; --card: #0d1117; --neon: #00f2ff; --up: #00ff66; --down: #ff3333; }
             body { background: var(--bg); color: #fff; font-family: sans-serif; margin: 0; padding-bottom: 100px; }
             .header { padding: 15px 0; text-align: center; background: rgba(10, 17, 24, 0.9); border-bottom: 2px solid var(--neon); position: sticky; top: 0; z-index: 1000; backdrop-filter: blur(10px); }
             .container { padding: 20px; max-width: 500px; margin: auto; }
-            .pro-card { position: relative; background: var(--card); border-radius: 20px; margin-bottom: 25px; padding: 2px; overflow: hidden; display: block; text-decoration: none; color: inherit; box-shadow: 0 0 15px var(--neon); }
+            .pro-card { position: relative; background: var(--card); border-radius: 20px; margin-bottom: 25px; padding: 2px; overflow: hidden; display: block; text-decoration: none; color: inherit; box-shadow: 0 0 15px var(--neon); cursor: pointer; }
             .pro-card::after { content: ''; position: absolute; inset: 4px; background: #0d1117; border-radius: 16px; z-index: 1; }
             .inner-content { position: relative; z-index: 10; padding: 15px; display: flex; align-items: center; justify-content: space-between; }
             .score-circle { width: 65px; height: 65px; border-radius: 50%; border: 2px solid var(--neon); display: flex; flex-direction: column; justify-content: center; align-items: center; }
@@ -313,63 +225,12 @@ def index():
             .c-bar { width: 5px; border-radius: 1px; animation: glow 1.5s infinite; }
             @keyframes glow { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
             .footer { position: fixed; bottom: 0; width: 100%; background: rgba(10, 17, 24, 0.9); padding: 15px; text-align: center; border-top: 1px solid #21262d; font-size: 0.7rem; color: #8b949e; }
-        </style>
-    </head>
-    <body>
-        <div class="header"><h1>🔱 {{title}}</h1><div id="ticker" style="color:var(--neon); font-weight:bold;"><span id="nifty_top">...</span> | <span id="bn_top">...</span></div></div>
-        <div class="container" id="terminal"></div>
-        <div class="footer">{{credit}}</div>
-        <script>
-            const beep = new Audio('https://actions.google.com/sounds/v1/alarms/beep_short.ogg');
-            let played = new Set();
-            async function update() {
-                try {
-                    const r = await fetch('/api/pro_feed');
-                    const data = await r.json();
-                    document.getElementById('nifty_top').innerText = data.nifty;
-                    document.getElementById('bn_top').innerText = data.bn;
-                    let html = '';
-                    data.stocks.forEach(s => {
-                        let isHigh = s.score >= 85 && s.is_stable;
-                        let candleColor = s.score >= 80 ? 'var(--up)' : 'var(--down)';
-                        let glow = isHigh ? 'entry-ready' : '';
-                        if(isHigh && !played.has(s.symbol)) { beep.play(); played.add(s.symbol); }
-                        else if(!isHigh) { played.delete(s.symbol); }
-                        html += `
-                        <a href="/chart/${s.symbol}" class="pro-card">
-                            <div class="inner-content">
-                                <div><span style="font-size:0.8rem; color:#8b949e; font-weight:bold;">${s.symbol}</span><div style="font-size:1.6rem; font-weight:900; color:var(--neon);">₹${s.price}</div></div>
-                                <div class="score-circle ${glow}"><b style="font-size:1.1rem;">${s.score}%</b><span style="font-size:0.5rem; font-weight:bold;">${s.dir}</span></div>
-                                <div style="display:flex; align-items:flex-end; gap:2px; height:45px;">
-                                    <div class="c-bar" style="height:25px; background:${candleColor}"></div>
-                                    <div class="c-bar" style="height:35px; background:${candleColor}"></div>
-                                    <div class="c-bar" style="height:30px; background:${candleColor}"></div>
-                                </div>
-                            </div>
-                        </a>`;
-                    });
-                    document.getElementById('terminal').innerHTML = html;
-                } catch(e) {}
-            }
-            setInterval(update, 5000); update();
-        </script>
-    </body>
-    </html>
-    ''', title="कान्हादेशी ट्रेडर: MTF Mode", credit="POWERED BY ANGEL ONE & CALLMEBOT")
-
-@app.route('/chart/<symbol>')
-def chart(symbol):
-    return render_template_string('''
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="UTF-8">
-        <title>{{symbol}} Analysis</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>
-            :root { --bg: #02040a; --card: #0d1117; --neon: #00f2ff; --up: #00ff66; --down: #ff3333; }
-            body { background: var(--bg); color: #fff; font-family: sans-serif; margin: 0; padding: 15px; padding-top: 70px; display: flex; flex-direction: column; align-items: center; }
-            .action-card { position: relative; background: var(--card); border-radius: 20px; margin-bottom: 20px; padding: 2px; overflow: hidden; width: 100%; max-width: 420px; box-shadow: 0 0 15px var(--neon); }
+            
+            /* VIEW SWITCHING MAGIC */
+            #dashboard-view { display: block; }
+            #chart-view { display: none; }
+            
+            .action-card { position: relative; background: var(--card); border-radius: 20px; margin-bottom: 20px; padding: 2px; overflow: hidden; width: 100%; box-shadow: 0 0 15px var(--neon); }
             .action-card::after { content: ''; position: absolute; inset: 4px; background: #0d1117; border-radius: 16px; z-index: 1; }
             .inner { position: relative; z-index: 10; padding: 15px; text-align: center; }
             .p-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; text-align: left; }
@@ -379,71 +240,106 @@ def chart(symbol):
         </style>
     </head>
     <body>
-        <div style="position: absolute; top: 20px; left: 20px;"><a href="/" style="color:#8b949e; text-decoration:none; font-weight:bold;">⬅️ BACK</a></div>
-        <div class="action-card"><div class="inner"><h1 style="color:var(--neon); margin:0; font-size: 2rem;">{{symbol}}</h1></div></div>
-
-        <div class="action-card">
-            <div class="inner">
-                <span style="color: var(--neon); font-weight: bold; font-size: 0.8rem;">🎯 ENTRY PLAN (BUY)</span>
-                <div class="p-grid">
-                    <div class="p-item"><span class="p-label">Entry Price</span><span class="p-val" id="e_val">₹0</span></div>
-                    <div class="p-item"><span class="p-label">Stop Loss (SL)</span><span class="p-val" id="sl_val" style="color:var(--down);">₹0</span></div>
-                    <div class="p-item"><span class="p-label">T1 (Safe)</span><span class="p-val" id="t1" style="color:var(--up);">₹0</span></div>
-                    <div class="p-item"><span class="p-label">T2 (Pro)</span><span class="p-val" id="t2" style="color:var(--up);">₹0</span></div>
-                    <div class="p-item" style="grid-column: span 2;"><span class="p-label">T3 (Jackpot)</span><span class="p-val" id="t3" style="color:var(--up);">₹0</span></div>
-                </div>
-            </div>
+        <div class="header"><h1>🔱 {{title}}</h1><div id="ticker" style="color:var(--neon); font-weight:bold;"><span id="nifty_top">...</span> | <span id="bn_top">...</span></div></div>
+        
+        <div id="dashboard-view" class="container">
+            <div id="terminal">Loading...</div>
         </div>
 
-        <div class="action-card"><div style="position:relative; z-index:10; width:100%; height:280px; border-radius:12px; overflow:hidden;"><div id="tv_chart" style="height:100%;"></div><script src="https://s3.tradingview.com/tv.js"></script><script>new TradingView.widget({"autosize": true, "symbol": "NSE:{{symbol}}", "interval": "15", "theme": "dark", "container_id": "tv_chart", "hide_top_toolbar": true});</script></div></div>
+        <div id="chart-view" class="container">
+            <button onclick="showDashboard()" style="background:#333; color:white; border:none; padding:10px 20px; border-radius:10px; margin-bottom:15px; font-weight:bold; cursor:pointer;">⬅️ BACK</button>
+            
+            <div class="action-card"><div class="inner"><h1 id="c_symbol" style="color:var(--neon); margin:0; font-size: 2rem;">...</h1></div></div>
 
-        <div class="action-card">
-            <div class="inner">
-                <span style="color: var(--neon); font-weight: bold; font-size: 0.8rem;">📊 SMC TECHNICAL DETAILS</span>
-                <div class="p-grid">
-                    <div class="p-item"><span class="p-label">1. Support</span><span class="p-val" id="sup">₹0</span></div>
-                    <div class="p-item"><span class="p-label">2. Resist.</span><span class="p-val" id="res">₹0</span></div>
-                    <div class="p-item"><span class="p-label">3. Trend</span><span class="p-val" id="trend">--</span></div>
-                    <div class="p-item"><span class="p-label">4. Order Block</span><span class="p-val" id="ob">--</span></div>
-                    <div class="p-item"><span class="p-label">5. FVG Status</span><span class="p-val" id="fvg">--</span></div>
-                    <div class="p-item"><span class="p-label">6. SL Hunting</span><span class="p-val" id="slh">--</span></div>
-                    <div class="p-item"><span class="p-label">7. Liq. Sweep</span><span class="p-val" id="liq">--</span></div>
-                    <div class="p-item"><span class="p-label">8. Breakout</span><span class="p-val" id="brk">--</span></div>
-                    <div class="p-item"><span class="p-label">9. Vol Spike</span><span class="p-val" id="vol">--</span></div>
-                    <div class="p-item"><span class="p-label">10. MTF Conf.</span><span class="p-val" id="mtf">--</span></div>
-                    <div class="p-item"><span class="p-label">11. Correlation</span><span class="p-val" id="corr">--</span></div>
-                    <div class="p-item"><span class="p-label">12. Vol @ Price</span><span class="p-val" id="vap">--</span></div>
-                    <div class="p-item" style="grid-column: span 2; border: 1px solid var(--down);"><span class="p-label">13. Trap Analysis</span><span class="p-val" id="trap" style="color:var(--down);">--</span></div>
-                </div>
-                <hr style="border: 0.5px solid #21262d; margin-top: 15px;">
-                <span style="color: var(--up); font-weight: bold; font-size: 0.7rem;">⚙️ SEQUENCE OF LOGIC</span>
-                <div class="p-grid" style="grid-template-columns: 1fr;">
-                    <div class="p-item" style="padding: 5px;"><span class="p-label" style="display:inline;">1. Scanning: </span><span class="p-val" id="s1" style="font-size:0.7rem;">...</span></div>
-                    <div class="p-item" style="padding: 5px;"><span class="p-label" style="display:inline;">2. Filtering: </span><span class="p-val" id="s2" style="font-size:0.7rem;">...</span></div>
-                    <div class="p-item" style="padding: 5px;"><span class="p-label" style="display:inline;">3. Confirmation: </span><span class="p-val" id="s3" style="font-size:0.7rem;">...</span></div>
-                    <div class="p-item" style="padding: 5px;"><span class="p-label" style="display:inline;">4. Trap Check: </span><span class="p-val" id="s4" style="font-size:0.7rem;">...</span></div>
-                    <div class="p-item" style="padding: 5px;"><span class="p-label" style="display:inline;">5. Action: </span><span class="p-val" id="s5" style="font-size:0.7rem; color:var(--up);">...</span></div>
+            <div class="action-card">
+                <div class="inner">
+                    <span style="color: var(--neon); font-weight: bold; font-size: 0.8rem;">🎯 ENTRY PLAN (BUY)</span>
+                    <div class="p-grid">
+                        <div class="p-item"><span class="p-label">Entry Price</span><span class="p-val" id="e_val">₹0</span></div>
+                        <div class="p-item"><span class="p-label">Stop Loss (SL)</span><span class="p-val" id="sl_val" style="color:var(--down);">₹0</span></div>
+                        <div class="p-item"><span class="p-label">T1 (Safe)</span><span class="p-val" id="t1" style="color:var(--up);">₹0</span></div>
+                        <div class="p-item"><span class="p-label">T2 (Pro)</span><span class="p-val" id="t2" style="color:var(--up);">₹0</span></div>
+                        <div class="p-item" style="grid-column: span 2;"><span class="p-label">T3 (Jackpot)</span><span class="p-val" id="t3" style="color:var(--up);">₹0</span></div>
+                    </div>
                 </div>
             </div>
+
+            <div class="action-card"><div style="position:relative; z-index:10; width:100%; height:300px; border-radius:12px; overflow:hidden;"><div id="tv_chart_container" style="height:100%;"></div></div></div>
+
+            <div class="action-card">
+                <div class="inner">
+                    <span style="color: var(--neon); font-weight: bold; font-size: 0.8rem;">📊 SMC TECHNICAL DETAILS</span>
+                    <div class="p-grid">
+                        <div class="p-item"><span class="p-label">1. Support</span><span class="p-val" id="sup">₹0</span></div>
+                        <div class="p-item"><span class="p-label">2. Resist.</span><span class="p-val" id="res">₹0</span></div>
+                        <div class="p-item"><span class="p-label">3. Trend</span><span class="p-val" id="trend">--</span></div>
+                        <div class="p-item"><span class="p-label">4. Order Block</span><span class="p-val" id="ob">--</span></div>
+                        <div class="p-item"><span class="p-label">5. FVG Status</span><span class="p-val" id="fvg">--</span></div>
+                        <div class="p-item"><span class="p-label">6. SL Hunting</span><span class="p-val" id="slh">--</span></div>
+                        <div class="p-item"><span class="p-label">7. Liq. Sweep</span><span class="p-val" id="liq">--</span></div>
+                        <div class="p-item"><span class="p-label">8. Breakout</span><span class="p-val" id="brk">--</span></div>
+                        <div class="p-item"><span class="p-label">9. Vol Spike</span><span class="p-val" id="vol">--</span></div>
+                        <div class="p-item"><span class="p-label">10. MTF Conf.</span><span class="p-val" id="mtf">--</span></div>
+                        <div class="p-item"><span class="p-label">11. Correlation</span><span class="p-val" id="corr">--</span></div>
+                        <div class="p-item"><span class="p-label">12. Vol @ Price</span><span class="p-val" id="vap">--</span></div>
+                        <div class="p-item" style="grid-column: span 2; border: 1px solid var(--down);"><span class="p-label">13. Trap Analysis</span><span class="p-val" id="trap" style="color:var(--down);">--</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="action-card" onclick="fetchAI()" style="cursor:pointer;"><div class="inner"><span style="color: var(--neon); font-weight: bold; font-size: 0.8rem;">🤖 AI INSIGHT</span><div id="ai_insight" style="font-size: 0.85rem; color: var(--neon); margin-top: 10px; font-weight: bold;">विश्लेषणासाठी क्लिक करा...</div></div></div>
         </div>
 
-        <div class="action-card" onclick="fetchAI()" style="cursor:pointer;"><div class="inner"><span style="color: var(--neon); font-weight: bold; font-size: 0.8rem;">🤖 AI INSIGHT</span><div id="ai_insight" style="font-size: 0.85rem; color: var(--neon); margin-top: 10px; font-weight: bold;">विश्लेषणासाठी क्लिक करा...</div></div></div>
-
-        <div class="action-card"><div class="inner" style="text-align: left;"><span style="color: #ff3333; font-weight: bold; font-size: 0.7rem;">🛡️ RISK & TRADE LOCK</span><div style="display: flex; justify-content: space-between; margin-top: 10px; font-size: 0.8rem;"><div class="p-item" style="width:45%;"><span class="p-label">Daily Trades</span><b style="color:var(--neon);">0 / 2</b></div><div class="p-item" style="width:45%;"><span class="p-label">Max Loss</span><b style="color:var(--down);">₹150</b></div></div></div></div>
-
-        <div class="action-card"><div class="inner" style="text-align: left;"><span style="color: #8b949e; font-weight: bold; font-size: 0.7rem;">📊 SIGNAL HISTORY (LAST 30 DAYS)</span><div style="margin-top: 10px; font-size: 0.8rem;"><div style="display:flex; justify-content:space-between; padding:5px; border-bottom:1px solid #21262d;"><span style="color:#8b949e;">Win Rate</span><b style="color:var(--up);">78%</b></div><div style="display:flex; justify-content:space-between; padding:5px;"><span style="color:#8b949e;">Alerts (Today)</span><b id="alerts_count" style="color:var(--neon);">0</b></div></div></div></div>
-
+        <div class="footer">{{credit}}</div>
         <script>
-            async function fetchAI() { document.getElementById('ai_insight').innerText = " विचार करत आहे... 🤔"; const r = await fetch('/api/ai_analysis/{{symbol}}'); const d = await r.json(); document.getElementById('ai_insight').innerText = d.analysis; }
-            async function updateLive() {
+            const beep = new Audio('https://actions.google.com/sounds/v1/alarms/beep_short.ogg');
+            let played = new Set();
+            let currentSymbol = '';
+            let chartInterval = null;
+
+            // --- NO RELOAD LOGIC ---
+            function openChart(symbol) {
+                currentSymbol = symbol;
+                document.getElementById('dashboard-view').style.display = 'none';
+                document.getElementById('chart-view').style.display = 'block';
+                document.getElementById('c_symbol').innerText = symbol;
+                document.getElementById('ai_insight').innerText = "विश्लेषणासाठी क्लिक करा...";
+                
+                // Load Chart
+                new TradingView.widget({
+                    "autosize": true,
+                    "symbol": "NSE:" + symbol,
+                    "interval": "15",
+                    "theme": "dark",
+                    "container_id": "tv_chart_container",
+                    "hide_top_toolbar": true
+                });
+
+                // Immediately update ALL details (not just chart)
+                updateChartData();
+                chartInterval = setInterval(updateChartData, 5000);
+            }
+
+            function closeChart() {
+                document.getElementById('chart-view').style.display = 'none';
+                document.getElementById('dashboard-view').style.display = 'block';
+                if(chartInterval) clearInterval(chartInterval);
+            }
+
+            // --- FILL ALL DATA (IMP) ---
+            async function updateChartData() {
+                if(!currentSymbol) return;
                 try {
-                    const r = await fetch('/api/smc_live/{{symbol}}');
+                    const r = await fetch('/api/smc_live/' + currentSymbol);
                     const d = await r.json();
+                    
+                    // Filling ALL fields exactly like your previous page
                     document.getElementById('e_val').innerText = '₹'+d.entry;
                     document.getElementById('sl_val').innerText = '₹'+d.sl;
                     document.getElementById('t1').innerText = '₹'+d.tp1;
                     document.getElementById('t2').innerText = '₹'+d.tp2;
                     document.getElementById('t3').innerText = '₹'+d.tp3;
+                    
                     document.getElementById('sup').innerText = '₹'+d.sup;
                     document.getElementById('res').innerText = '₹'+d.res;
                     document.getElementById('trend').innerText = d.trend;
@@ -457,19 +353,58 @@ def chart(symbol):
                     document.getElementById('corr').innerText = d.corr;
                     document.getElementById('vap').innerText = d.vap;
                     document.getElementById('trap').innerText = d.trap;
-                    document.getElementById('s1').innerText = d.s1;
-                    document.getElementById('s2').innerText = d.s2;
-                    document.getElementById('s3').innerText = d.s3;
-                    document.getElementById('s4').innerText = d.s4;
-                    document.getElementById('s5').innerText = d.s5;
-                    document.getElementById('alerts_count').innerText = d.alerts;
                 } catch(e){}
             }
-            setInterval(updateLive, 5000); updateLive();
+
+            async function fetchAI() { 
+                if(!currentSymbol) return;
+                document.getElementById('ai_insight').innerText = " विचार करत आहे... 🤔"; 
+                const r = await fetch('/api/ai_analysis/' + currentSymbol); 
+                const d = await r.json(); 
+                document.getElementById('ai_insight').innerText = d.analysis; 
+            }
+
+            async function update() {
+                // If Chart is open, don't update list
+                if(document.getElementById('dashboard-view').style.display === 'none') return;
+
+                try {
+                    const r = await fetch('/api/pro_feed');
+                    const data = await r.json();
+                    document.getElementById('nifty_top').innerText = data.nifty;
+                    document.getElementById('bn_top').innerText = data.bn;
+                    let html = '';
+                    data.stocks.forEach(s => {
+                        let isHigh = s.score >= 85 && s.is_stable;
+                        let candleColor = s.score >= 80 ? 'var(--up)' : 'var(--down)';
+                        let glow = isHigh ? 'entry-ready' : '';
+                        if(isHigh && !played.has(s.symbol)) { beep.play(); played.add(s.symbol); }
+                        else if(!isHigh) { played.delete(s.symbol); }
+                        html += `
+                        <div onclick="openChart('${s.symbol}')" class="pro-card">
+                            <div class="inner-content">
+                                <div><span style="font-size:0.8rem; color:#8b949e; font-weight:bold;">${s.symbol}</span><div style="font-size:1.6rem; font-weight:900; color:var(--neon);">₹${s.price}</div></div>
+                                <div class="score-circle ${glow}"><b style="font-size:1.1rem;">${s.score}%</b><span style="font-size:0.5rem; font-weight:bold;">${s.dir}</span></div>
+                                <div style="display:flex; align-items:flex-end; gap:2px; height:45px;">
+                                    <div class="c-bar" style="height:25px; background:${candleColor}"></div>
+                                    <div class="c-bar" style="height:35px; background:${candleColor}"></div>
+                                    <div class="c-bar" style="height:30px; background:${candleColor}"></div>
+                                </div>
+                            </div>
+                        </div>`;
+                    });
+                    document.getElementById('terminal').innerHTML = html;
+                } catch(e) {}
+            }
+            setInterval(update, 5000); update();
         </script>
     </body>
     </html>
-    ''', symbol=symbol)
+    ''', title="कान्हादेशी ट्रेडर: MTF Mode", credit="POWERED BY ANGEL ONE & CALLMEBOT")
+
+@app.route('/chart/<symbol>')
+def chart(symbol):
+    return "Merged into Home Page"
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
