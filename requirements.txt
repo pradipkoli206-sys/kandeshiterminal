@@ -1,6 +1,8 @@
 flask
-requests
-pytz
-gunicorn
-NorenRestApiPy
+smartapi-python
 pyotp
+pandas
+pandas_ta
+google-generativeai
+requests
+gunicorn
