@@ -56,7 +56,7 @@ GEMINI_KEY = os.environ.get('GEMINI_API_KEY')
 if GEMINI_KEY:
     try:
         genai.configure(api_key=GEMINI_KEY)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-3-flash-preview')
     except Exception as e:
         model = None
         ai_status = f"Setup Error: {str(e)}"
