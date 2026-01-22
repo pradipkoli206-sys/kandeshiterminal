@@ -47,20 +47,21 @@ def update_token_map():
 
 update_token_map()
 
-# --- AI CONFIGURATION ---
+# --- AI CONFIGURATION (FIXED & SECURE) ---
 ai_status = "OK"
-GEMINI_KEY = os.environ.get('GEMINI_API_KEY')
+GEMINI_KEY = os.environ.get('GEMINI_API_KEY') # आता Key इथून घेतली जाईल
 
 if GEMINI_KEY:
     try:
         genai.configure(api_key=GEMINI_KEY)
-        model = genai.GenerativeModel('gemini-3-flash-preview')
+        # मॉडेल 'gemini-1.5-flash' किंवा 'gemini-pro' वापरा
+        model = genai.GenerativeModel('gemini-3-pro-preview')
     except Exception as e:
         model = None
         ai_status = f"Setup Error: {str(e)}"
 else:
     model = None
-    ai_status = "Error: GEMINI_API_KEY Missing"
+    ai_status = "Error: GEMINI_API_KEY not found in environment variables"
 
 # --- SMARTAPI LOGIN ---
 smartApi = None
@@ -100,9 +101,6 @@ def fetch_candle_data(token, interval="FIFTEEN_MINUTE", days=5):
         if data and data.get('data'):
             df = pd.DataFrame(data['data'], columns=["timestamp", "open", "high", "low", "close", "volume"])
             df['close'] = df['close'].astype(float)
-            df['open'] = df['open'].astype(float)
-            df['high'] = df['high'].astype(float)
-            df['low'] = df['low'].astype(float)
             return df
     except: return None
     return None
@@ -203,28 +201,13 @@ def api_smc_live(symbol):
     data = get_ultra_pro_data(symbol)
     return jsonify(data) if data else jsonify({"error": "not found"})
 
-# --- नवीन Route चार्ट डेटा साठी (NEW CHART ROUTE) ---
-@app.route('/api/history/<symbol>')
-def api_history(symbol):
-    try:
-        token = TOKEN_MAP.get(symbol)
-        if not token: return jsonify([])
-        df = fetch_candle_data(token, interval="FIFTEEN_MINUTE", days=20)
-        if df is None or df.empty: return jsonify([])
-        chart_data = []
-        for index, row in df.iterrows():
-            dt = pd.to_datetime(row['timestamp'])
-            ts = int(dt.timestamp()) + 19800 # IST Time Fix
-            chart_data.append({ 'time': ts, 'open': row['open'], 'high': row['high'], 'low': row['low'], 'close': row['close'] })
-        return jsonify(chart_data)
-    except: return jsonify([])
-
 @app.route('/api/ai_analysis/<symbol>')
 def ai_analysis(symbol):
     if not model: return jsonify({"analysis": f"AI Error: {ai_status}"})
     data = get_ultra_pro_data(symbol)
     prompt = f"Stock: {symbol}, Price: {data['price']}, Trend: {data['trend']}, Score: {data['score']}. Marathi advice in 3 lines: Entry, Risk, Target."
     try: 
+        # Attempt generation
         response = model.generate_content(prompt)
         return jsonify({"analysis": response.text})
     except Exception as e: 
@@ -240,7 +223,7 @@ def index():
         <meta charset="UTF-8">
         <title>{{title}}</title>
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+        <script src="https://s3.tradingview.com/tv.js"></script>
         <style>
             :root { --bg: #02040a; --card: #0d1117; --neon: #00f2ff; --up: #00ff66; --down: #ff3333; }
             body { background: var(--bg); color: #fff; font-family: sans-serif; margin: 0; padding-bottom: 100px; }
@@ -293,11 +276,7 @@ def index():
                 </div>
             </div>
 
-            <div class="action-card">
-                <div style="position:relative; z-index:10; width:100%; height:350px; border-radius:12px; overflow:hidden; background:#0d1117;">
-                    <div id="tv_chart_container" style="height:100%; width:100%;"></div>
-                </div>
-            </div>
+            <div class="action-card"><div style="position:relative; z-index:10; width:100%; height:350px; border-radius:12px; overflow:hidden;"><div id="tv_chart_container" style="height:100%;"></div></div></div>
 
             <div class="action-card">
                 <div class="inner">
@@ -330,11 +309,8 @@ def index():
             let played = new Set();
             let currentSymbol = '';
             let chartInterval = null;
-            
-            // चार्ट चे वेरिएबल्स (नवीन)
-            let chartInstance = null;
-            let candleSeries = null;
 
+            // --- SPA LOGIC (NO RELOAD) ---
             function openChart(symbol) {
                 currentSymbol = symbol;
                 document.getElementById('dashboard-view').style.display = 'none';
@@ -342,42 +318,23 @@ def index():
                 document.getElementById('c_symbol').innerText = symbol;
                 document.getElementById('ai_insight').innerText = "विश्लेषणासाठी क्लिक करा...";
                 
-                // --- जुना चार्ट क्लिअर करणे ---
-                document.getElementById('tv_chart_container').innerHTML = '';
-
-                // --- नवीन Real Chart तयार करणे (TradingView Widget नाही) ---
-                chartInstance = LightweightCharts.createChart(document.getElementById('tv_chart_container'), {
-                    width: document.getElementById('tv_chart_container').clientWidth,
-                    height: 350,
-                    layout: { backgroundColor: '#0d1117', textColor: '#d1d4dc' },
-                    grid: { vertLines: { color: '#1f2937' }, horzLines: { color: '#1f2937' } },
-                    timeScale: { timeVisible: true, secondsVisible: false },
+                // --- TRADINGVIEW FIX (Added Locale: "in") ---
+                new TradingView.widget({
+                    "autosize": true,
+                    "symbol": "NSE:" + symbol, 
+                    "interval": "15",
+                    "timezone": "Asia/Kolkata",
+                    "theme": "dark",
+                    "style": "1",
+                    "locale": "in", // IMPORTANT: Fixes the "Symbol not found" error for Indian Stocks
+                    "toolbar_bg": "#f1f3f6",
+                    "enable_publishing": false,
+                    "hide_top_toolbar": true,
+                    "container_id": "tv_chart_container"
                 });
 
-                candleSeries = chartInstance.addCandlestickSeries({
-                    upColor: '#00ff66', downColor: '#ff3333', borderVisible: false, wickUpColor: '#00ff66', wickDownColor: '#ff3333'
-                });
-
-                // डेटा लोड करा
-                loadCandleData(symbol);
-                updateChartData(); // SMC डेटासाठी
-                
-                if(chartInterval) clearInterval(chartInterval);
-                chartInterval = setInterval(() => {
-                    loadCandleData(symbol);
-                    updateChartData();
-                }, 5000);
-            }
-
-            // नवीन फंक्शन चार्ट डेटा साठी
-            async function loadCandleData(symbol) {
-                try {
-                    const r = await fetch('/api/history/' + symbol);
-                    const data = await r.json();
-                    if(data.length > 0) {
-                        candleSeries.setData(data);
-                    }
-                } catch(e) { console.log("Chart Data Error"); }
+                updateChartData();
+                chartInterval = setInterval(updateChartData, 5000);
             }
 
             function showDashboard() {
@@ -386,7 +343,6 @@ def index():
                 if(chartInterval) clearInterval(chartInterval);
             }
 
-            // तुमचं SMC लॉजिक जसेच्या तसे
             async function updateChartData() {
                 if(!currentSymbol) return;
                 try {
