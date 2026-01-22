@@ -56,6 +56,7 @@ GEMINI_KEY = os.environ.get('GEMINI_API_KEY')
 if GEMINI_KEY:
     try:
         genai.configure(api_key=GEMINI_KEY)
+        # जसाच्या तसा Gemini 3 Flash Preview
         model = genai.GenerativeModel('gemini-3-flash-preview')
     except Exception as e:
         model = None
@@ -72,8 +73,12 @@ def angel_login():
         smartApi = SmartConnect(api_key=API_KEY)
         totp = pyotp.TOTP(TOTP_SECRET).now()
         data = smartApi.generateSession(CLIENT_ID, PASSWORD, totp)
-        return data['status']
-    except Exception:
+        if data.get('status'):
+            print("🔐 Angel One Login Successful")
+            return True
+        return False
+    except Exception as e:
+        print(f"❌ Login Error: {e}")
         return False
 
 angel_login()
@@ -90,7 +95,7 @@ def send_telegram_alert(symbol, score, price, trend):
             f"💰 किंमत: ₹{price}\n"
             f"🔥 स्कोर: {score}%\n"
             f"📊 ट्रेंड: {trend}\n"
-            f"⏰ वेळ: {datetime.now().strftime('%H:%M')}"
+            f"⏰ वेळ: {get_ist_time().strftime('%H:%M')}"
         )
         encoded_msg = urllib.parse.quote(message)
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage?chat_id={TELEGRAM_CHAT_ID}&text={encoded_msg}&parse_mode=Markdown"
@@ -100,14 +105,12 @@ def send_telegram_alert(symbol, score, price, trend):
 
 # --- HELPER: IST TIME ---
 def get_ist_time():
-    # Render Server UTC वर असतो, त्याला IST (UTC+5:30) मध्ये बदलतो
     return datetime.utcnow() + timedelta(hours=5, minutes=30)
 
 # --- DATA FUNCTIONS ---
 def fetch_candle_data(token, interval="FIFTEEN_MINUTE", days=5):
     global smartApi
     try:
-        # बदला: IST Time वापरला आहे
         todate = get_ist_time()
         fromdate = todate - timedelta(days=days)
         params = {
@@ -116,6 +119,14 @@ def fetch_candle_data(token, interval="FIFTEEN_MINUTE", days=5):
             "todate": todate.strftime("%Y-%m-%d %H:%M")
         }
         data = smartApi.getCandleData(params)
+        
+        # AB1004 आणि इतर एरर हँडलिंग
+        if data and data.get('status') == False:
+            print(f"⚠️ API Error for {token}: {data.get('message')}")
+            if "AB1004" in data.get('errorcode', ''):
+                time.sleep(1) # Rate limit आल्यास थोडा वेळ थांबा
+            return None
+
         if data and data.get('data'):
             df = pd.DataFrame(data['data'], columns=["timestamp", "open", "high", "low", "close", "volume"])
             df['close'] = df['close'].astype(float)
@@ -157,9 +168,8 @@ def get_ultra_pro_data(ticker):
 
         df_15m = fetch_candle_data(token, interval="FIFTEEN_MINUTE", days=5)
         
-        # 1h Data फक्त गरज असेल तरच (API वाचवण्यासाठी)
+        # 1h Data (Smart Loading logic)
         df_1h = None 
-        # df_1h = fetch_candle_data(token, interval="ONE_HOUR", days=20) 
 
         if df_15m is not None: price = df_15m['close'].iloc[-1]
         else:
@@ -172,14 +182,18 @@ def get_ultra_pro_data(ticker):
         
         mtf_msg = "NEUTRAL"
         mtf_bonus = 0
-        # MTF Logic (Optional for Speed)
-        if df_1h is not None and len(df_1h) > 50:
-            df_1h['ema_50'] = df_1h.ta.ema(length=50)
-            h_ema = df_1h['ema_50'].iloc[-1]
-            h_trend = "BULLISH" if price > h_ema else "BEARISH"
-            if "BULLISH" in trend and h_trend == "BULLISH": mtf_bonus = 10; mtf_msg = "ALIGNED 🚀"
-            elif "BEARISH" in trend and h_trend == "BEARISH": mtf_bonus = 10; mtf_msg = "ALIGNED 🔻"
-            else: mtf_bonus = -15; mtf_msg = "CONFLICT ⚠️"
+        
+        # MTF Logic (फक्त गरज असेल तरच API कॉल करण्यासाठी)
+        if score >= 65:
+            time.sleep(0.4) # Rate limit वाचवण्यासाठी गॅप
+            df_1h = fetch_candle_data(token, interval="ONE_HOUR", days=20)
+            if df_1h is not None and len(df_1h) > 50:
+                df_1h['ema_50'] = df_1h.ta.ema(length=50)
+                h_ema = df_1h['ema_50'].iloc[-1]
+                h_trend = "BULLISH" if price > h_ema else "BEARISH"
+                if "BULLISH" in trend and h_trend == "BULLISH": mtf_bonus = 10; mtf_msg = "ALIGNED 🚀"
+                elif "BEARISH" in trend and h_trend == "BEARISH": mtf_bonus = 10; mtf_msg = "ALIGNED 🔻"
+                else: mtf_bonus = -15; mtf_msg = "CONFLICT ⚠️"
         
         score += mtf_bonus
         final_score = max(5, min(99, score))
@@ -193,7 +207,6 @@ def get_ultra_pro_data(ticker):
             history[ticker]['dir'] = "↑" if final_score > prev else ("↓" if final_score < prev else "●")
             history[ticker]['val'] = final_score
 
-        # TELEGRAM ALERT TRIGGER LOGIC
         today = get_ist_time().strftime("%Y-%m-%d")
         if final_score >= 85 and history[ticker]['stable'] >= 1:
             if f"{ticker}_{today}" not in sent_alerts:
@@ -218,12 +231,11 @@ def get_ultra_pro_data(ticker):
 @app.route('/api/pro_feed')
 def api_pro_feed():
     res = []
-    # बदला: Loop आणि Delay ज्यामुळे AB1004 एरर येणार नाही
     for s in STOCKS:
         data = get_ultra_pro_data(s)
         if data:
             res.append(data)
-        time.sleep(0.5) # 0.5 सेकंदाचा Delay (Rate Limit Fix)
+        time.sleep(0.7) # AB1004 फिक्स करण्यासाठी महत्वाचा गॅप
     
     valid = sorted(res, key=lambda x: x['score'], reverse=True)
     return jsonify({"stocks": valid, "nifty": "NIFTY: LIVE", "bn": "BN: LIVE"})
@@ -244,7 +256,7 @@ def ai_analysis(symbol):
     except Exception as e: 
         return jsonify({"analysis": f"AI Generate Error: {str(e)}"})
 
-# --- HTML TEMPLATES (COMPLETE) ---
+# --- HTML TEMPLATE ---
 @app.route('/')
 def index():
     return render_template_string('''
@@ -268,11 +280,8 @@ def index():
             .c-bar { width: 5px; border-radius: 1px; animation: glow 1.5s infinite; }
             @keyframes glow { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
             .footer { position: fixed; bottom: 0; width: 100%; background: rgba(10, 17, 24, 0.9); padding: 15px; text-align: center; border-top: 1px solid #21262d; font-size: 0.7rem; color: #8b949e; }
-            
-            /* -- SPA STYLES (NO RELOAD) -- */
             #dashboard-view { display: block; }
             #chart-view { display: none; }
-            
             .action-card { position: relative; background: var(--card); border-radius: 20px; margin-bottom: 20px; padding: 2px; overflow: hidden; width: 100%; box-shadow: 0 0 15px var(--neon); }
             .action-card::after { content: ''; position: absolute; inset: 4px; background: #0d1117; border-radius: 16px; z-index: 1; }
             .inner { position: relative; z-index: 10; padding: 15px; text-align: center; }
@@ -284,96 +293,58 @@ def index():
     </head>
     <body>
         <div class="header"><h1>🔱 {{title}}</h1><div id="ticker" style="color:var(--neon); font-weight:bold;"><span id="nifty_top">...</span> | <span id="bn_top">...</span></div></div>
-        
-        <div class="container" id="dashboard-view">
-            <div id="terminal">Loading...</div>
-        </div>
-
+        <div class="container" id="dashboard-view"><div id="terminal">Loading...</div></div>
         <div class="container" id="chart-view">
             <button onclick="showDashboard()" style="background:#333; color:white; border:none; padding:10px 20px; border-radius:10px; margin-bottom:15px; font-weight:bold; cursor:pointer;">⬅️ BACK</button>
-            
             <div class="action-card"><div class="inner"><h1 id="c_symbol" style="color:var(--neon); margin:0; font-size: 2rem;">...</h1></div></div>
-
-            <div class="action-card">
-                <div class="inner">
-                    <span style="color: var(--neon); font-weight: bold; font-size: 0.8rem;">🎯 ENTRY PLAN (BUY)</span>
-                    <div class="p-grid">
-                        <div class="p-item"><span class="p-label">Entry Price</span><span class="p-val" id="e_val">₹0</span></div>
-                        <div class="p-item"><span class="p-label">Stop Loss (SL)</span><span class="p-val" id="sl_val" style="color:var(--down);">₹0</span></div>
-                        <div class="p-item"><span class="p-label">T1 (Safe)</span><span class="p-val" id="t1" style="color:var(--up);">₹0</span></div>
-                        <div class="p-item"><span class="p-label">T2 (Pro)</span><span class="p-val" id="t2" style="color:var(--up);">₹0</span></div>
-                        <div class="p-item" style="grid-column: span 2;"><span class="p-label">T3 (Jackpot)</span><span class="p-val" id="t3" style="color:var(--up);">₹0</span></div>
-                    </div>
-                </div>
-            </div>
-
+            <div class="action-card"><div class="inner"><span style="color: var(--neon); font-weight: bold; font-size: 0.8rem;">🎯 ENTRY PLAN (BUY)</span><div class="p-grid">
+                <div class="p-item"><span class="p-label">Entry Price</span><span class="p-val" id="e_val">₹0</span></div>
+                <div class="p-item"><span class="p-label">Stop Loss (SL)</span><span class="p-val" id="sl_val" style="color:var(--down);">₹0</span></div>
+                <div class="p-item"><span class="p-label">T1 (Safe)</span><span class="p-val" id="t1" style="color:var(--up);">₹0</span></div>
+                <div class="p-item"><span class="p-label">T2 (Pro)</span><span class="p-val" id="t2" style="color:var(--up);">₹0</span></div>
+                <div class="p-item" style="grid-column: span 2;"><span class="p-label">T3 (Jackpot)</span><span class="p-val" id="t3" style="color:var(--up);">₹0</span></div>
+            </div></div></div>
             <div class="action-card"><div style="position:relative; z-index:10; width:100%; height:350px; border-radius:12px; overflow:hidden;"><div id="tv_chart_container" style="height:100%;"></div></div></div>
-
-            <div class="action-card">
-                <div class="inner">
-                    <span style="color: var(--neon); font-weight: bold; font-size: 0.8rem;">📊 SMC TECHNICAL DETAILS</span>
-                    <div class="p-grid">
-                        <div class="p-item"><span class="p-label">1. Support</span><span class="p-val" id="sup">₹0</span></div>
-                        <div class="p-item"><span class="p-label">2. Resist.</span><span class="p-val" id="res">₹0</span></div>
-                        <div class="p-item"><span class="p-label">3. Trend</span><span class="p-val" id="trend">--</span></div>
-                        <div class="p-item"><span class="p-label">4. Order Block</span><span class="p-val" id="ob">--</span></div>
-                        <div class="p-item"><span class="p-label">5. FVG Status</span><span class="p-val" id="fvg">--</span></div>
-                        <div class="p-item"><span class="p-label">6. SL Hunting</span><span class="p-val" id="slh">--</span></div>
-                        <div class="p-item"><span class="p-label">7. Liq. Sweep</span><span class="p-val" id="liq">--</span></div>
-                        <div class="p-item"><span class="p-label">8. Breakout</span><span class="p-val" id="brk">--</span></div>
-                        <div class="p-item"><span class="p-label">9. Vol Spike</span><span class="p-val" id="vol">--</span></div>
-                        <div class="p-item"><span class="p-label">10. MTF Conf.</span><span class="p-val" id="mtf">--</span></div>
-                        <div class="p-item"><span class="p-label">11. Correlation</span><span class="p-val" id="corr">--</span></div>
-                        <div class="p-item"><span class="p-label">12. Vol @ Price</span><span class="p-val" id="vap">--</span></div>
-                        <div class="p-item" style="grid-column: span 2; border: 1px solid var(--down);"><span class="p-label">13. Trap Analysis</span><span class="p-val" id="trap" style="color:var(--down);">--</span></div>
-                    </div>
-                </div>
-            </div>
-
+            <div class="action-card"><div class="inner"><span style="color: var(--neon); font-weight: bold; font-size: 0.8rem;">📊 SMC TECHNICAL DETAILS</span><div class="p-grid">
+                <div class="p-item"><span class="p-label">1. Support</span><span class="p-val" id="sup">₹0</span></div>
+                <div class="p-item"><span class="p-label">2. Resist.</span><span class="p-val" id="res">₹0</span></div>
+                <div class="p-item"><span class="p-label">3. Trend</span><span class="p-val" id="trend">--</span></div>
+                <div class="p-item"><span class="p-label">4. Order Block</span><span class="p-val" id="ob">--</span></div>
+                <div class="p-item"><span class="p-label">5. FVG Status</span><span class="p-val" id="fvg">--</span></div>
+                <div class="p-item"><span class="p-label">6. SL Hunting</span><span class="p-val" id="slh">--</span></div>
+                <div class="p-item"><span class="p-label">7. Liq. Sweep</span><span class="p-val" id="liq">--</span></div>
+                <div class="p-item"><span class="p-label">8. Breakout</span><span class="p-val" id="brk">--</span></div>
+                <div class="p-item"><span class="p-label">9. Vol Spike</span><span class="p-val" id="vol">--</span></div>
+                <div class="p-item"><span class="p-label">10. MTF Conf.</span><span class="p-val" id="mtf">--</span></div>
+                <div class="p-item"><span class="p-label">11. Correlation</span><span class="p-val" id="corr">--</span></div>
+                <div class="p-item"><span class="p-label">12. Vol @ Price</span><span class="p-val" id="vap">--</span></div>
+                <div class="p-item" style="grid-column: span 2; border: 1px solid var(--down);"><span class="p-label">13. Trap Analysis</span><span class="p-val" id="trap" style="color:var(--down);">--</span></div>
+            </div></div></div>
             <div class="action-card" onclick="fetchAI()" style="cursor:pointer;"><div class="inner"><span style="color: var(--neon); font-weight: bold; font-size: 0.8rem;">🤖 AI INSIGHT</span><div id="ai_insight" style="font-size: 0.85rem; color: var(--neon); margin-top: 10px; font-weight: bold;">विश्लेषणासाठी क्लिक करा...</div></div></div>
         </div>
-
         <div class="footer">{{credit}}</div>
-        
         <script>
-            const beep = new Audio('https://actions.google.com/sounds/v1/alarms/beep_short.ogg');
-            let played = new Set();
             let currentSymbol = '';
             let chartInterval = null;
-
-            // --- SPA LOGIC (NO RELOAD) ---
             function openChart(symbol) {
                 currentSymbol = symbol;
                 document.getElementById('dashboard-view').style.display = 'none';
                 document.getElementById('chart-view').style.display = 'block';
                 document.getElementById('c_symbol').innerText = symbol;
                 document.getElementById('ai_insight').innerText = "विश्लेषणासाठी क्लिक करा...";
-                
-                // --- TRADINGVIEW FIX (Added Locale: "in") ---
                 new TradingView.widget({
-                    "autosize": true,
-                    "symbol": "NSE:" + symbol, 
-                    "interval": "15",
-                    "timezone": "Asia/Kolkata",
-                    "theme": "dark",
-                    "style": "1",
-                    "locale": "in", // IMPORTANT: Fixes the "Symbol not found" error for Indian Stocks
-                    "toolbar_bg": "#f1f3f6",
-                    "enable_publishing": false,
-                    "hide_top_toolbar": true,
-                    "container_id": "tv_chart_container"
+                    "autosize": true, "symbol": "NSE:" + symbol, "interval": "15",
+                    "timezone": "Asia/Kolkata", "theme": "dark", "style": "1", "locale": "in",
+                    "toolbar_bg": "#f1f3f6", "enable_publishing": false, "hide_top_toolbar": true, "container_id": "tv_chart_container"
                 });
-
                 updateChartData();
                 chartInterval = setInterval(updateChartData, 5000);
             }
-
             function showDashboard() {
                 document.getElementById('chart-view').style.display = 'none';
                 document.getElementById('dashboard-view').style.display = 'block';
                 if(chartInterval) clearInterval(chartInterval);
             }
-
             async function updateChartData() {
                 if(!currentSymbol) return;
                 try {
@@ -399,7 +370,6 @@ def index():
                     document.getElementById('trap').innerText = d.trap;
                 } catch(e){}
             }
-
             async function fetchAI() { 
                 if(!currentSymbol) return;
                 document.getElementById('ai_insight').innerText = " विचार करत आहे... 🤔"; 
@@ -407,10 +377,8 @@ def index():
                 const d = await r.json(); 
                 document.getElementById('ai_insight').innerText = d.analysis; 
             }
-
             async function update() {
                 if(document.getElementById('dashboard-view').style.display === 'none') return;
-
                 try {
                     const r = await fetch('/api/pro_feed');
                     const data = await r.json();
@@ -421,26 +389,16 @@ def index():
                         let isHigh = s.score >= 85 && s.is_stable;
                         let candleColor = s.score >= 80 ? 'var(--up)' : 'var(--down)';
                         let glow = isHigh ? 'entry-ready' : '';
-                        
-                        // ONCLICK Function (No Page Reload)
-                        html += `
-                        <div onclick="openChart('${s.symbol}')" class="pro-card">
-                            <div class="inner-content">
-                                <div><span style="font-size:0.8rem; color:#8b949e; font-weight:bold;">${s.symbol}</span><div style="font-size:1.6rem; font-weight:900; color:var(--neon);">₹${s.price}</div></div>
-                                <div class="score-circle ${glow}"><b style="font-size:1.1rem;">${s.score}%</b><span style="font-size:0.5rem; font-weight:bold;">${s.dir}</span></div>
-                                <div style="display:flex; align-items:flex-end; gap:2px; height:45px;">
-                                    <div class="c-bar" style="height:25px; background:${candleColor}"></div>
-                                    <div class="c-bar" style="height:35px; background:${candleColor}"></div>
-                                    <div class="c-bar" style="height:30px; background:${candleColor}"></div>
-                                </div>
-                            </div>
-                        </div>`;
+                        html += `<div onclick="openChart('${s.symbol}')" class="pro-card"><div class="inner-content">
+                        <div><span style="font-size:0.8rem; color:#8b949e; font-weight:bold;">${s.symbol}</span><div style="font-size:1.6rem; font-weight:900; color:var(--neon);">₹${s.price}</div></div>
+                        <div class="score-circle ${glow}"><b style="font-size:1.1rem;">${s.score}%</b><span style="font-size:0.5rem; font-weight:bold;">${s.dir}</span></div>
+                        <div style="display:flex; align-items:flex-end; gap:2px; height:45px;"><div class="c-bar" style="height:25px; background:${candleColor}"></div>
+                        <div class="c-bar" style="height:35px; background:${candleColor}"></div><div class="c-bar" style="height:30px; background:${candleColor}"></div></div></div></div>`;
                     });
                     document.getElementById('terminal').innerHTML = html;
                 } catch(e) {}
             }
-            // रिफ्रेश रेट वाढवला (8 सेकंद) म्हणजे सर्व्हरवर लोड येणार नाही
-            setInterval(update, 8000); update();
+            setInterval(update, 9000); update();
         </script>
     </body>
     </html>
