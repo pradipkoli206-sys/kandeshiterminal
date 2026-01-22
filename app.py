@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import requests
 import urllib.parse
 from datetime import datetime, timedelta
@@ -18,7 +19,7 @@ CLIENT_ID = os.environ.get('CLIENT_ID')
 PASSWORD = os.environ.get('PASSWORD')
 TOTP_SECRET = os.environ.get('TOTP_SECRET')
 
-# Telegram Config (नवीन)
+# Telegram Config
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 
@@ -55,7 +56,7 @@ GEMINI_KEY = os.environ.get('GEMINI_API_KEY')
 if GEMINI_KEY:
     try:
         genai.configure(api_key=GEMINI_KEY)
-        model = genai.GenerativeModel('gemini-3-flash-preview')
+        model = genai.GenerativeModel('gemini-1.5-flash')
     except Exception as e:
         model = None
         ai_status = f"Setup Error: {str(e)}"
@@ -77,9 +78,8 @@ def angel_login():
 
 angel_login()
 
-# --- TELEGRAM ALERT FUNCTION (NEW) ---
+# --- TELEGRAM ALERT FUNCTION ---
 def send_telegram_alert(symbol, score, price, trend):
-    # जर Environment Variable सेट नसतील तर इथेच थांबा
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return
 
@@ -98,11 +98,17 @@ def send_telegram_alert(symbol, score, price, trend):
     except Exception as e:
         print(f"❌ Telegram Error: {e}")
 
+# --- HELPER: IST TIME ---
+def get_ist_time():
+    # Render Server UTC वर असतो, त्याला IST (UTC+5:30) मध्ये बदलतो
+    return datetime.utcnow() + timedelta(hours=5, minutes=30)
+
 # --- DATA FUNCTIONS ---
 def fetch_candle_data(token, interval="FIFTEEN_MINUTE", days=5):
     global smartApi
     try:
-        todate = datetime.now()
+        # बदला: IST Time वापरला आहे
+        todate = get_ist_time()
         fromdate = todate - timedelta(days=days)
         params = {
             "exchange": "NSE", "symboltoken": token, "interval": interval,
@@ -120,9 +126,10 @@ def fetch_candle_data(token, interval="FIFTEEN_MINUTE", days=5):
 def calculate_technical_score(df, current_price):
     if df is None or len(df) < 20: return 50, "WAITING", 0, "NEUTRAL"
     df['rsi'] = df.ta.rsi(length=14)
-    current_rsi = df['rsi'].iloc[-1]
+    current_rsi = df['rsi'].iloc[-1] if pd.notna(df['rsi'].iloc[-1]) else 50
     df['ema_50'] = df.ta.ema(length=50)
     current_ema = df['ema_50'].iloc[-1] if pd.notna(df['ema_50'].iloc[-1]) else current_price
+    
     score = 50
     trend = "SIDEWAYS"
     if current_price > current_ema:
@@ -131,6 +138,7 @@ def calculate_technical_score(df, current_price):
     else:
         score -= 10
         trend = "BEARISH 📉"
+    
     if 30 <= current_rsi <= 45 and trend == "BULLISH 🚀": score += 30 
     elif current_rsi > 70: score -= 20 
     elif current_rsi < 30: score += 20 
@@ -148,7 +156,10 @@ def get_ultra_pro_data(ticker):
         if not token: return None
 
         df_15m = fetch_candle_data(token, interval="FIFTEEN_MINUTE", days=5)
-        df_1h = fetch_candle_data(token, interval="ONE_HOUR", days=20)
+        
+        # 1h Data फक्त गरज असेल तरच (API वाचवण्यासाठी)
+        df_1h = None 
+        # df_1h = fetch_candle_data(token, interval="ONE_HOUR", days=20) 
 
         if df_15m is not None: price = df_15m['close'].iloc[-1]
         else:
@@ -161,6 +172,7 @@ def get_ultra_pro_data(ticker):
         
         mtf_msg = "NEUTRAL"
         mtf_bonus = 0
+        # MTF Logic (Optional for Speed)
         if df_1h is not None and len(df_1h) > 50:
             df_1h['ema_50'] = df_1h.ta.ema(length=50)
             h_ema = df_1h['ema_50'].iloc[-1]
@@ -182,7 +194,7 @@ def get_ultra_pro_data(ticker):
             history[ticker]['val'] = final_score
 
         # TELEGRAM ALERT TRIGGER LOGIC
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = get_ist_time().strftime("%Y-%m-%d")
         if final_score >= 85 and history[ticker]['stable'] >= 1:
             if f"{ticker}_{today}" not in sent_alerts:
                 send_telegram_alert(ticker, final_score, price, trend)
@@ -205,8 +217,15 @@ def get_ultra_pro_data(ticker):
 # --- ROUTES ---
 @app.route('/api/pro_feed')
 def api_pro_feed():
-    res = [get_ultra_pro_data(s) for s in STOCKS]
-    valid = sorted([x for x in res if x], key=lambda x: x['score'], reverse=True)
+    res = []
+    # बदला: Loop आणि Delay ज्यामुळे AB1004 एरर येणार नाही
+    for s in STOCKS:
+        data = get_ultra_pro_data(s)
+        if data:
+            res.append(data)
+        time.sleep(0.5) # 0.5 सेकंदाचा Delay (Rate Limit Fix)
+    
+    valid = sorted(res, key=lambda x: x['score'], reverse=True)
     return jsonify({"stocks": valid, "nifty": "NIFTY: LIVE", "bn": "BN: LIVE"})
 
 @app.route('/api/smc_live/<symbol>')
@@ -420,7 +439,8 @@ def index():
                     document.getElementById('terminal').innerHTML = html;
                 } catch(e) {}
             }
-            setInterval(update, 5000); update();
+            // रिफ्रेश रेट वाढवला (8 सेकंद) म्हणजे सर्व्हरवर लोड येणार नाही
+            setInterval(update, 8000); update();
         </script>
     </body>
     </html>
