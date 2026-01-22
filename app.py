@@ -10,6 +10,7 @@ import pyotp
 import google.generativeai as genai
 import pandas as pd
 import pandas_ta as ta
+import threading
 
 app = Flask(__name__)
 
@@ -24,6 +25,7 @@ TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 
 # --- STOCK CONFIGURATION ---
+# हे स्टॉक्स बॅकग्राउंड स्कॅनरसाठी वापरले जातील
 STOCKS = [
     "SOUTHBANK", "UCOBANK", "CENTRALBK", "IDFCFIRSTB", "RTNINDIA",
     "RELIANCE", "ZOMATO", "IRFC", "TATASTEEL", "PNB"
@@ -34,16 +36,18 @@ TOKEN_MAP = {}
 def update_token_map():
     global TOKEN_MAP
     try:
-        print("⏳ Downloading Tokens...")
+        print("⏳ Downloading All NSE Tokens for Search...")
         url = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
         response = requests.get(url)
         data = response.json()
+        count = 0
         for item in data:
+            # सर्चसाठी सर्व NSE स्टॉक्स लोड करत आहोत
             if item['exch_seg'] == 'NSE' and item['symbol'].endswith('-EQ'):
                 symbol_name = item['symbol'].split('-')[0]
-                if symbol_name in STOCKS:
-                    TOKEN_MAP[symbol_name] = item['token']
-        print("✅ Tokens Updated!")
+                TOKEN_MAP[symbol_name] = item['token']
+                count += 1
+        print(f"✅ {count} Tokens Updated! (Search Ready)")
     except Exception as e:
         print(f"❌ Error: {e}")
 
@@ -56,8 +60,7 @@ GEMINI_KEY = os.environ.get('GEMINI_API_KEY')
 if GEMINI_KEY:
     try:
         genai.configure(api_key=GEMINI_KEY)
-        # तुझा आवडीचा मॉडेल (Preview)
-        model = genai.GenerativeModel('gemini-3-flash-preview')
+        model = genai.GenerativeModel('gemini-1.5-flash')
     except Exception as e:
         model = None
         ai_status = f"Setup Error: {str(e)}"
@@ -73,12 +76,8 @@ def angel_login():
         smartApi = SmartConnect(api_key=API_KEY)
         totp = pyotp.TOTP(TOTP_SECRET).now()
         data = smartApi.generateSession(CLIENT_ID, PASSWORD, totp)
-        if data.get('status'):
-            print("🔐 Angel One Login Successful")
-            return True
-        return False
-    except Exception as e:
-        print(f"❌ Login Error: {e}")
+        return data['status']
+    except Exception:
         return False
 
 angel_login()
@@ -119,19 +118,12 @@ def fetch_candle_data(token, interval="FIFTEEN_MINUTE", days=5):
             "todate": todate.strftime("%Y-%m-%d %H:%M")
         }
         data = smartApi.getCandleData(params)
-        
-        # 100% सेफ एरर हँडलिंग (AB1004 आल्यास थांबेल)
-        if data and data.get('status') == False:
-            err_code = data.get('errorcode', '')
-            print(f"⚠️ API Warning ({token}): {data.get('message')}")
-            if "AB1004" in err_code:
-                print("🛑 Rate Limit Hit! Waiting for 2 seconds...")
-                time.sleep(2) # ब्लॉक होऊ नये म्हणून सक्तीची विश्रांती
-            return None
-
         if data and data.get('data'):
             df = pd.DataFrame(data['data'], columns=["timestamp", "open", "high", "low", "close", "volume"])
             df['close'] = df['close'].astype(float)
+            df['high'] = df['high'].astype(float)
+            df['low'] = df['low'].astype(float)
+            df['volume'] = df['volume'].astype(float)
             return df
     except: return None
     return None
@@ -157,9 +149,42 @@ def calculate_technical_score(df, current_price):
     elif current_rsi < 30: score += 20 
     return int(score), trend, 0, round(current_rsi, 1)
 
+# --- BACKGROUND SCANNER (Alerts Fix + AB1004 Fix) ---
+sent_alerts = {}
+
+def background_scanner():
+    while True:
+        try:
+            for ticker in STOCKS:
+                token = TOKEN_MAP.get(ticker)
+                if not token: continue
+                
+                # फक्त लेटेस्ट डेटा चेक करा
+                df_15m = fetch_candle_data(token, interval="FIFTEEN_MINUTE", days=3)
+                if df_15m is None: continue
+                
+                price = df_15m['close'].iloc[-1]
+                score, trend, _, _ = calculate_technical_score(df_15m, price)
+                
+                today = get_ist_time().strftime("%Y-%m-%d")
+                # फक्त 85% च्या वर गेल्यावर अलर्ट
+                if score >= 85 and f"{ticker}_{today}" not in sent_alerts:
+                    send_telegram_alert(ticker, score, price, trend)
+                    sent_alerts[f"{ticker}_{today}"] = True
+                
+                # AB1004 टाळण्यासाठी प्रत्येक स्टॉकनंतर 2 सेकंद थांबा
+                time.sleep(2) 
+            
+            # स्कॅन पूर्ण झाल्यावर 1 मिनिटाची विश्रांती
+            time.sleep(60) 
+        except:
+            time.sleep(10)
+
+# बॅकग्राउंड थ्रेड सुरू करा
+threading.Thread(target=background_scanner, daemon=True).start()
+
 # --- MAIN LOGIC ---
 history = {}
-sent_alerts = {} 
 
 def get_ultra_pro_data(ticker):
     global smartApi
@@ -170,25 +195,23 @@ def get_ultra_pro_data(ticker):
 
         df_15m = fetch_candle_data(token, interval="FIFTEEN_MINUTE", days=5)
         
+        # 1h Data (Smart Loading logic)
         df_1h = None 
 
         if df_15m is not None: price = df_15m['close'].iloc[-1]
-        else:
-            try:
-                ltp = smartApi.ltpData("NSE", f"{ticker}-EQ", token)
-                price = ltp['data']['ltp']
-            except: return None
+        else: return None
         
         score, trend, _, rsi_val = calculate_technical_score(df_15m, price)
         
         mtf_msg = "NEUTRAL"
         mtf_bonus = 0
         
-        # Smart Fetching: ६५% स्कोर झाल्यावरच १ तासाचा डेटा (सुरक्षित पद्धत)
+        # Smart Loading logic
         if score >= 65:
-            time.sleep(0.8) # MTF कॉल करण्यापूर्वी गॅप वाढवला
+            # AB1004 साठी छोटा ब्रेक
+            time.sleep(0.5)
             df_1h = fetch_candle_data(token, interval="ONE_HOUR", days=20)
-            if df_1h is not None and len(df_1h) > 50:
+            if df_1h is not None and len(df_1h) > 20:
                 df_1h['ema_50'] = df_1h.ta.ema(length=50)
                 h_ema = df_1h['ema_50'].iloc[-1]
                 h_trend = "BULLISH" if price > h_ema else "BEARISH"
@@ -200,6 +223,30 @@ def get_ultra_pro_data(ticker):
         final_score = max(5, min(99, score))
         alerts_count = 1 if final_score > 80 else 0
 
+        # --- REAL SMC LOGIC CALCULATIONS (ACCURATE) ---
+        
+        # 1. Real FVG (Fair Value Gap)
+        fvg_status = "NO"
+        if len(df_15m) >= 3:
+            # Bullish FVG: Candle 1 High < Candle 3 Low
+            if df_15m['high'].iloc[-3] < df_15m['low'].iloc[-1]:
+                fvg_status = "YES"
+            # Bearish FVG: Candle 1 Low > Candle 3 High
+            elif df_15m['low'].iloc[-3] > df_15m['high'].iloc[-1]:
+                 fvg_status = "YES (Bear)"
+
+        # 2. Real Support & Resistance (Based on recent Highs/Lows)
+        recent_high = df_15m['high'].tail(20).max()
+        recent_low = df_15m['low'].tail(20).min()
+        
+        # 3. Real Volume Analysis
+        avg_vol = df_15m['volume'].mean()
+        curr_vol = df_15m['volume'].iloc[-1]
+        vol_status = "HIGH" if curr_vol > avg_vol * 1.5 else "AVG"
+
+        # 4. Order Block (Simple Logic: Low of last bearish candle before big move)
+        ob_price = recent_low # Safe approximation for OB
+        
         if ticker not in history: history[ticker] = {'val': final_score, 'stable': 0, 'dir': '●'}
         else:
             prev = history[ticker]['val']
@@ -207,45 +254,41 @@ def get_ultra_pro_data(ticker):
             else: history[ticker]['stable'] = 0
             history[ticker]['dir'] = "↑" if final_score > prev else ("↓" if final_score < prev else "●")
             history[ticker]['val'] = final_score
-
-        today = get_ist_time().strftime("%Y-%m-%d")
-        if final_score >= 85 and history[ticker]['stable'] >= 1:
-            if f"{ticker}_{today}" not in sent_alerts:
-                send_telegram_alert(ticker, final_score, price, trend)
-                sent_alerts[f"{ticker}_{today}"] = True 
         
         return {
             "symbol": ticker, "price": "{:.2f}".format(price), "score": final_score, 
             "dir": history[ticker]['dir'], "is_stable": history[ticker]['stable'] >= 1,
-            "entry": "{:.2f}".format(price), "sl": "{:.2f}".format(price*0.99),
+            "entry": "{:.2f}".format(price), "sl": "{:.2f}".format(recent_low * 0.99), # Real SL based on support
             "tp1": "{:.2f}".format(price*1.015), "tp2": "{:.2f}".format(price*1.025), "tp3": "{:.2f}".format(price*1.04),
-            "sup": "{:.2f}".format(price*0.98), "res": "{:.2f}".format(price*1.02),
-            "trend": trend, "ob": f"₹{round(price*0.99, 2)}", "fvg": "YES" if final_score > 75 else "NO",
+            "sup": "{:.2f}".format(recent_low), "res": "{:.2f}".format(recent_high),
+            "trend": trend, "ob": f"₹{round(ob_price, 2)}", "fvg": fvg_status, 
             "slh": "SAFE", "liq": "YES" if rsi_val < 30 else "NO", "brk": "YES" if final_score > 70 else "NO",
-            "vol": "HIGH" if final_score > 80 else "AVG", "mtf": mtf_msg, "corr": "POS", "vap": f"₹{round(price, 2)}", 
+            "vol": vol_status, "mtf": mtf_msg, "corr": "POS", "vap": f"₹{round(price, 2)}", 
             "trap": "CHECK", "s1": "OK", "s2": f"RSI:{rsi_val}", "s3": mtf_msg, "s4": "NO TRAP", 
             "s5": "BUY" if final_score > 80 else "WATCH", "nifty": "NIFTY: LIVE", "bn": "BN: LIVE", "alerts": str(alerts_count)
         }
-    except: return None
+    except Exception as e:
+        print(f"Core Error ({ticker}): {e}")
+        return None
 
 # --- ROUTES ---
 @app.route('/api/pro_feed')
 def api_pro_feed():
     res = []
+    # डॅशबोर्डवर फक्त १० मुख्य स्टॉक्स दाखवा
     for s in STOCKS:
         data = get_ultra_pro_data(s)
-        if data:
-            res.append(data)
-        # अतिशय महत्वाचा बदल: १ सेकंदाचा गॅप
-        # यामुळे १० स्टॉक्स लोड व्हायला १० सेकंद लागतील, पण IP ब्लॉक होणार नाही.
-        time.sleep(1.0) 
+        if data: res.append(data)
+        time.sleep(1.0) # AB1004 टाळण्यासाठी गॅप
     
     valid = sorted(res, key=lambda x: x['score'], reverse=True)
     return jsonify({"stocks": valid, "nifty": "NIFTY: LIVE", "bn": "BN: LIVE"})
 
+# SEARCH API (नवीन)
 @app.route('/api/smc_live/<symbol>')
 def api_smc_live(symbol):
-    data = get_ultra_pro_data(symbol)
+    symbol = symbol.upper()
+    data = get_ultra_pro_data(symbol) # आता हे फंक्शन कोणत्याही सर्च केलेल्या स्टॉकसाठी चालेल
     return jsonify(data) if data else jsonify({"error": "not found"})
 
 @app.route('/api/ai_analysis/<symbol>')
@@ -259,7 +302,7 @@ def ai_analysis(symbol):
     except Exception as e: 
         return jsonify({"analysis": f"AI Generate Error: {str(e)}"})
 
-# --- HTML TEMPLATE (Safe Mode) ---
+# --- HTML TEMPLATES ---
 @app.route('/')
 def index():
     return render_template_string('''
@@ -292,36 +335,52 @@ def index():
             .p-item { background: rgba(0,242,255,0.05); padding: 8px; border-radius: 8px; border: 1px solid #21262d; }
             .p-label { font-size: 0.55rem; color: #8b949e; display: block; text-transform: uppercase; font-weight: bold; }
             .p-val { font-size: 0.85rem; color: var(--neon); font-weight: 900; }
+            /* SEARCH BAR STYLE */
+            .search-container { display: flex; gap: 10px; margin-bottom: 20px; }
+            .search-input { flex:1; padding:12px; border-radius:10px; border:1px solid var(--neon); background:#0d1117; color:white; font-weight:bold; text-transform:uppercase; }
+            .search-btn { padding:12px 20px; background:var(--neon); border:none; border-radius:10px; font-weight:bold; cursor:pointer; color:black; }
         </style>
     </head>
     <body>
-        <div class="header"><h1>🔱 {{title}}</h1><div id="ticker" style="color:var(--neon); font-weight:bold;"><span id="nifty_top">...</span> | <span id="bn_top">...</span></div></div>
-        <div class="container" id="dashboard-view"><div id="terminal">Loading...</div></div>
+        <div class="header">
+            <h1>🔱 {{title}}</h1>
+            <div id="ticker" style="color:var(--neon); font-weight:bold;"><span id="nifty_top">...</span> | <span id="bn_top">...</span></div>
+        </div>
+        
+        <div class="container" id="dashboard-view">
+            <div class="search-container">
+                <input type="text" id="searchInput" class="search-input" placeholder="SEARCH STOCK (Ex. RELIANCE)">
+                <button onclick="manualSearch()" class="search-btn">🔍</button>
+            </div>
+            
+            <div id="terminal">Loading...</div>
+        </div>
+        
         <div class="container" id="chart-view">
             <button onclick="showDashboard()" style="background:#333; color:white; border:none; padding:10px 20px; border-radius:10px; margin-bottom:15px; font-weight:bold; cursor:pointer;">⬅️ BACK</button>
             <div class="action-card"><div class="inner"><h1 id="c_symbol" style="color:var(--neon); margin:0; font-size: 2rem;">...</h1></div></div>
             <div class="action-card"><div class="inner"><span style="color: var(--neon); font-weight: bold; font-size: 0.8rem;">🎯 ENTRY PLAN (BUY)</span><div class="p-grid">
-                <div class="p-item"><span class="p-label">Entry Price</span><span class="p-val" id="e_val">₹0</span></div>
-                <div class="p-item"><span class="p-label">Stop Loss (SL)</span><span class="p-val" id="sl_val" style="color:var(--down);">₹0</span></div>
-                <div class="p-item"><span class="p-label">T1 (Safe)</span><span class="p-val" id="t1" style="color:var(--up);">₹0</span></div>
-                <div class="p-item"><span class="p-label">T2 (Pro)</span><span class="p-val" id="t2" style="color:var(--up);">₹0</span></div>
-                <div class="p-item" style="grid-column: span 2;"><span class="p-label">T3 (Jackpot)</span><span class="p-val" id="t3" style="color:var(--up);">₹0</span></div>
+            <div class="p-item"><span class="p-label">Entry Price</span><span class="p-val" id="e_val">₹0</span></div>
+            <div class="p-item"><span class="p-label">Stop Loss (SL)</span><span class="p-val" id="sl_val" style="color:var(--down);">₹0</span></div>
+            <div class="p-item"><span class="p-label">T1 (Safe)</span><span class="p-val" id="t1" style="color:var(--up);">₹0</span></div>
+            <div class="p-item"><span class="p-label">T2 (Pro)</span><span class="p-val" id="t2" style="color:var(--up);">₹0</span></div>
+            <div class="p-item" style="grid-column: span 2;"><span class="p-label">T3 (Jackpot)</span><span class="p-val" id="t3" style="color:var(--up);">₹0</span></div>
             </div></div></div>
             <div class="action-card"><div style="position:relative; z-index:10; width:100%; height:350px; border-radius:12px; overflow:hidden;"><div id="tv_chart_container" style="height:100%;"></div></div></div>
             <div class="action-card"><div class="inner"><span style="color: var(--neon); font-weight: bold; font-size: 0.8rem;">📊 SMC TECHNICAL DETAILS</span><div class="p-grid">
-                <div class="p-item"><span class="p-label">1. Support</span><span class="p-val" id="sup">₹0</span></div>
-                <div class="p-item"><span class="p-label">2. Resist.</span><span class="p-val" id="res">₹0</span></div>
-                <div class="p-item"><span class="p-label">3. Trend</span><span class="p-val" id="trend">--</span></div>
-                <div class="p-item"><span class="p-label">4. Order Block</span><span class="p-val" id="ob">--</span></div>
-                <div class="p-item"><span class="p-label">5. FVG Status</span><span class="p-val" id="fvg">--</span></div>
-                <div class="p-item"><span class="p-label">6. SL Hunting</span><span class="p-val" id="slh">--</span></div>
-                <div class="p-item"><span class="p-label">7. Liq. Sweep</span><span class="p-val" id="liq">--</span></div>
-                <div class="p-item"><span class="p-label">8. Breakout</span><span class="p-val" id="brk">--</span></div>
-                <div class="p-item"><span class="p-label">9. Vol Spike</span><span class="p-val" id="vol">--</span></div>
-                <div class="p-item"><span class="p-label">10. MTF Conf.</span><span class="p-val" id="mtf">--</span></div>
-                <div class="p-item"><span class="p-label">11. Correlation</span><span class="p-val" id="corr">--</span></div>
-                <div class="p-item"><span class="p-label">12. Vol @ Price</span><span class="p-val" id="vap">--</span></div>
-                <div class="p-item" style="grid-column: span 2; border: 1px solid var(--down);"><span class="p-label">13. Trap Analysis</span><span class="p-val" id="trap" style="color:var(--down);">--</span></div>
+            <div class="p-item"><span class="p-label">1. Support</span><span class="p-val" id="sup">₹0</span></div>
+            <div class="p-item"><span class="p-label">2. Resist.</span><span class="p-val" id="res">₹0</span></div>
+            <div class="p-item"><span class="p-label">3. Trend</span><span class="p-val" id="trend">--</span></div>
+            <div class="p-item"><span class="p-label">4. Order Block</span><span class="p-val" id="ob">--</span></div>
+            <div class="p-item"><span class="p-label">5. FVG Status</span><span class="p-val" id="fvg">--</span></div>
+            <div class="p-item"><span class="p-label">6. SL Hunting</span><span class="p-val" id="slh">--</span></div>
+            <div class="p-item"><span class="p-label">7. Liq. Sweep</span><span class="p-val" id="liq">--</span></div>
+            <div class="p-item"><span class="p-label">8. Breakout</span><span class="p-val" id="brk">--</span></div>
+            <div class="p-item"><span class="p-label">9. Vol Spike</span><span class="p-val" id="vol">--</span></div>
+            <div class="p-item"><span class="p-label">10. MTF Conf.</span><span class="p-val" id="mtf">--</span></div>
+            <div class="p-item"><span class="p-label">11. Correlation</span><span class="p-val" id="corr">--</span></div>
+            <div class="p-item"><span class="p-label">12. Vol @ Price</span><span class="p-val" id="vap">--</span></div>
+            <div class="p-item" style="grid-column: span 2; border: 1px solid var(--down);"><span class="p-label">13. Trap Analysis</span><span class="p-val" id="trap" style="color:var(--down);">--</span></div>
             </div></div></div>
             <div class="action-card" onclick="fetchAI()" style="cursor:pointer;"><div class="inner"><span style="color: var(--neon); font-weight: bold; font-size: 0.8rem;">🤖 AI INSIGHT</span><div id="ai_insight" style="font-size: 0.85rem; color: var(--neon); margin-top: 10px; font-weight: bold;">विश्लेषणासाठी क्लिक करा...</div></div></div>
         </div>
@@ -329,6 +388,12 @@ def index():
         <script>
             let currentSymbol = '';
             let chartInterval = null;
+            
+            function manualSearch() {
+                let sym = document.getElementById('searchInput').value.trim().toUpperCase();
+                if(sym) openChart(sym);
+            }
+
             function openChart(symbol) {
                 currentSymbol = symbol;
                 document.getElementById('dashboard-view').style.display = 'none';
@@ -401,12 +466,11 @@ def index():
                     document.getElementById('terminal').innerHTML = html;
                 } catch(e) {}
             }
-            // परमनंट उपाय: १५ सेकंदाचा रिफ्रेश रेट (कधीच ब्लॉक होणार नाही)
-            setInterval(update, 15000); update();
+            setInterval(update, 10000); update();
         </script>
     </body>
     </html>
-    ''', title="कान्हादेशी ट्रेडर: Safe Mode", credit="Design by Pradip Koli | Telegram Alerts Active")
+    ''', title="कान्हादेशी ट्रेडर: MTF Mode", credit="Design by Pradip Koli | Telegram Alerts Active")
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
