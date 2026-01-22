@@ -56,7 +56,7 @@ GEMINI_KEY = os.environ.get('GEMINI_API_KEY')
 if GEMINI_KEY:
     try:
         genai.configure(api_key=GEMINI_KEY)
-        # जसाच्या तसा Gemini 3 Flash Preview
+        # तुझा आवडीचा मॉडेल (Preview)
         model = genai.GenerativeModel('gemini-3-flash-preview')
     except Exception as e:
         model = None
@@ -120,11 +120,13 @@ def fetch_candle_data(token, interval="FIFTEEN_MINUTE", days=5):
         }
         data = smartApi.getCandleData(params)
         
-        # AB1004 आणि इतर एरर हँडलिंग
+        # 100% सेफ एरर हँडलिंग (AB1004 आल्यास थांबेल)
         if data and data.get('status') == False:
-            print(f"⚠️ API Error for {token}: {data.get('message')}")
-            if "AB1004" in data.get('errorcode', ''):
-                time.sleep(1) # Rate limit आल्यास थोडा वेळ थांबा
+            err_code = data.get('errorcode', '')
+            print(f"⚠️ API Warning ({token}): {data.get('message')}")
+            if "AB1004" in err_code:
+                print("🛑 Rate Limit Hit! Waiting for 2 seconds...")
+                time.sleep(2) # ब्लॉक होऊ नये म्हणून सक्तीची विश्रांती
             return None
 
         if data and data.get('data'):
@@ -168,7 +170,6 @@ def get_ultra_pro_data(ticker):
 
         df_15m = fetch_candle_data(token, interval="FIFTEEN_MINUTE", days=5)
         
-        # 1h Data (Smart Loading logic)
         df_1h = None 
 
         if df_15m is not None: price = df_15m['close'].iloc[-1]
@@ -183,9 +184,9 @@ def get_ultra_pro_data(ticker):
         mtf_msg = "NEUTRAL"
         mtf_bonus = 0
         
-        # MTF Logic (फक्त गरज असेल तरच API कॉल करण्यासाठी)
+        # Smart Fetching: ६५% स्कोर झाल्यावरच १ तासाचा डेटा (सुरक्षित पद्धत)
         if score >= 65:
-            time.sleep(0.4) # Rate limit वाचवण्यासाठी गॅप
+            time.sleep(0.8) # MTF कॉल करण्यापूर्वी गॅप वाढवला
             df_1h = fetch_candle_data(token, interval="ONE_HOUR", days=20)
             if df_1h is not None and len(df_1h) > 50:
                 df_1h['ema_50'] = df_1h.ta.ema(length=50)
@@ -235,7 +236,9 @@ def api_pro_feed():
         data = get_ultra_pro_data(s)
         if data:
             res.append(data)
-        time.sleep(0.7) # AB1004 फिक्स करण्यासाठी महत्वाचा गॅप
+        # अतिशय महत्वाचा बदल: १ सेकंदाचा गॅप
+        # यामुळे १० स्टॉक्स लोड व्हायला १० सेकंद लागतील, पण IP ब्लॉक होणार नाही.
+        time.sleep(1.0) 
     
     valid = sorted(res, key=lambda x: x['score'], reverse=True)
     return jsonify({"stocks": valid, "nifty": "NIFTY: LIVE", "bn": "BN: LIVE"})
@@ -256,7 +259,7 @@ def ai_analysis(symbol):
     except Exception as e: 
         return jsonify({"analysis": f"AI Generate Error: {str(e)}"})
 
-# --- HTML TEMPLATE ---
+# --- HTML TEMPLATE (Safe Mode) ---
 @app.route('/')
 def index():
     return render_template_string('''
@@ -398,11 +401,12 @@ def index():
                     document.getElementById('terminal').innerHTML = html;
                 } catch(e) {}
             }
-            setInterval(update, 9000); update();
+            // परमनंट उपाय: १५ सेकंदाचा रिफ्रेश रेट (कधीच ब्लॉक होणार नाही)
+            setInterval(update, 15000); update();
         </script>
     </body>
     </html>
-    ''', title="कान्हादेशी ट्रेडर: MTF Mode", credit="Design by Pradip Koli | Telegram Alerts Active")
+    ''', title="कान्हादेशी ट्रेडर: Safe Mode", credit="Design by Pradip Koli | Telegram Alerts Active")
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
