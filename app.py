@@ -12,14 +12,15 @@ import pandas_ta as ta
 
 app = Flask(__name__)
 
-# --- 1. CONFIGURATION ---
+# --- 1. CONFIGURATION (ENVIRONMENT VARIABLES) ---
 API_KEY = os.environ.get('API_KEY')
 CLIENT_ID = os.environ.get('CLIENT_ID')
 PASSWORD = os.environ.get('PASSWORD')
 TOTP_SECRET = os.environ.get('TOTP_SECRET')
 
-WHATSAPP_PHONE = os.environ.get('WHATSAPP_PHONE', '+91XXXXXXXXXX')
-WHATSAPP_API_KEY = os.environ.get('WHATSAPP_API_KEY', 'XXXXXX')
+# Telegram Config (नवीन)
+TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID')
 
 # --- STOCK CONFIGURATION ---
 STOCKS = [
@@ -47,21 +48,20 @@ def update_token_map():
 
 update_token_map()
 
-# --- AI CONFIGURATION (FIXED & SECURE) ---
+# --- AI CONFIGURATION ---
 ai_status = "OK"
-GEMINI_KEY = os.environ.get('GEMINI_API_KEY') # आता Key इथून घेतली जाईल
+GEMINI_KEY = os.environ.get('GEMINI_API_KEY')
 
 if GEMINI_KEY:
     try:
         genai.configure(api_key=GEMINI_KEY)
-        # मॉडेल 'gemini-1.5-flash' किंवा 'gemini-pro' वापरा
-        model = genai.GenerativeModel('gemini-3-pro-preview')
+        model = genai.GenerativeModel('gemini-3-flash-preview')
     except Exception as e:
         model = None
         ai_status = f"Setup Error: {str(e)}"
 else:
     model = None
-    ai_status = "Error: GEMINI_API_KEY not found in environment variables"
+    ai_status = "Error: GEMINI_API_KEY not found"
 
 # --- SMARTAPI LOGIN ---
 smartApi = None
@@ -77,14 +77,26 @@ def angel_login():
 
 angel_login()
 
-# --- WHATSAPP ---
-def send_whatsapp_alert(symbol, score, price, trend):
+# --- TELEGRAM ALERT FUNCTION (NEW) ---
+def send_telegram_alert(symbol, score, price, trend):
+    # जर Environment Variable सेट नसतील तर इथेच थांबा
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+
     try:
-        message = f"🚨 *{symbol} Alert*\nScore: {score}\nPrice: {price}\nTrend: {trend}"
+        message = (
+            f"🚨 *कान्हादेशी ट्रेडर अलर्ट*\n\n"
+            f"📈 स्टॉक: {symbol}\n"
+            f"💰 किंमत: ₹{price}\n"
+            f"🔥 स्कोर: {score}%\n"
+            f"📊 ट्रेंड: {trend}\n"
+            f"⏰ वेळ: {datetime.now().strftime('%H:%M')}"
+        )
         encoded_msg = urllib.parse.quote(message)
-        url = f"https://api.callmebot.com/whatsapp.php?phone={WHATSAPP_PHONE}&text={encoded_msg}&apikey={WHATSAPP_API_KEY}"
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage?chat_id={TELEGRAM_CHAT_ID}&text={encoded_msg}&parse_mode=Markdown"
         requests.get(url, timeout=5)
-    except: pass
+    except Exception as e:
+        print(f"❌ Telegram Error: {e}")
 
 # --- DATA FUNCTIONS ---
 def fetch_candle_data(token, interval="FIFTEEN_MINUTE", days=5):
@@ -169,10 +181,11 @@ def get_ultra_pro_data(ticker):
             history[ticker]['dir'] = "↑" if final_score > prev else ("↓" if final_score < prev else "●")
             history[ticker]['val'] = final_score
 
+        # TELEGRAM ALERT TRIGGER LOGIC
         today = datetime.now().strftime("%Y-%m-%d")
         if final_score >= 85 and history[ticker]['stable'] >= 1:
             if f"{ticker}_{today}" not in sent_alerts:
-                send_whatsapp_alert(ticker, final_score, price, trend)
+                send_telegram_alert(ticker, final_score, price, trend)
                 sent_alerts[f"{ticker}_{today}"] = True 
         
         return {
@@ -207,13 +220,12 @@ def ai_analysis(symbol):
     data = get_ultra_pro_data(symbol)
     prompt = f"Stock: {symbol}, Price: {data['price']}, Trend: {data['trend']}, Score: {data['score']}. Marathi advice in 3 lines: Entry, Risk, Target."
     try: 
-        # Attempt generation
         response = model.generate_content(prompt)
         return jsonify({"analysis": response.text})
     except Exception as e: 
         return jsonify({"analysis": f"AI Generate Error: {str(e)}"})
 
-# --- HTML TEMPLATES ---
+# --- HTML TEMPLATES (COMPLETE) ---
 @app.route('/')
 def index():
     return render_template_string('''
@@ -412,11 +424,7 @@ def index():
         </script>
     </body>
     </html>
-    ''', title="कान्हादेशी ट्रेडर: MTF Mode", credit="POWERED BY ANGEL ONE & CALLMEBOT")
-
-@app.route('/chart/<symbol>')
-def chart(symbol):
-    return "Merged into Home Page"
+    ''', title="कान्हादेशी ट्रेडर: MTF Mode", credit="Design by Pradip Koli | Telegram Alerts Active")
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
