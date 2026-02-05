@@ -9,7 +9,6 @@ app = Flask(__name__)
 SYSTEM_ERROR = False
 
 # --- 1. KEYS FROM RENDER ENVIRONMENT ---
-# आता कोड config.py शोधणार नाही, तर Render चे Environment वाचेल
 API_KEY = os.environ.get("API_KEY")
 CLIENT_ID = os.environ.get("CLIENT_ID")
 PASSWORD = os.environ.get("PASSWORD")
@@ -98,7 +97,7 @@ t = threading.Thread(target=start_socket)
 t.daemon = True
 t.start()
 
-# --- 5. HTML TEMPLATE (UNCHANGED) ---
+# --- 5. HTML TEMPLATE ---
 HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="mr">
 <head>
@@ -186,10 +185,16 @@ h1 { margin: 0; text-shadow: 0 0 10px var(--neon); font-size: 1.4rem; letter-spa
 <div class="footer-item">BANKNIFTY <span class="footer-val red">LIVE</span></div>
 </div>
 <script>
+// --- CHANGED: Added AM/PM format ---
 function updateTime(){
-const now=new Date(); document.getElementById('date-display').innerText=now.toLocaleDateString('en-GB');
-document.getElementById('time-display').innerText=now.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-} setInterval(updateTime,1000); updateTime();
+    const now = new Date(); 
+    document.getElementById('date-display').innerText = now.toLocaleDateString('en-GB');
+    // येथे 'en-US' आणि 'hour12: true' वापरले आहे जेणेकरून AM/PM दिसेल
+    document.getElementById('time-display').innerText = now.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', hour12: true});
+} 
+setInterval(updateTime,1000); 
+updateTime();
+
 function calculateQty(){
 const cap=document.getElementById('userCapital').value; const select=document.getElementById('stockSelect');
 const price=select.value; const sigType=select.options[select.selectedIndex].getAttribute('data-sig');
@@ -219,7 +224,8 @@ def index():
         token = TOKEN_MAP.get(stock["name"])
         if token and token in live_data:
             stock["price"] = live_data[token]
-    return render_template_string(HTML_TEMPLATE, title="KANHADESHI TRADER", stocks=STOCKS, signals=SIGNALS, has_error=SYSTEM_ERROR)
+    # --- CHANGED: Reverted Title to Marathi ---
+    return render_template_string(HTML_TEMPLATE, title="कान्हादेशी ट्रेडर", stocks=STOCKS, signals=SIGNALS, has_error=SYSTEM_ERROR)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
