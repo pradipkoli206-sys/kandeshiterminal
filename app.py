@@ -1,4 +1,5 @@
 import os
+import pyotp  # <-- नवीन लायब्ररी (OTP जनरेट करण्यासाठी)
 from flask import Flask, render_template_string
 from SmartApi import SmartConnect
 from SmartApi.smartWebSocketV2 import SmartWebSocketV2
@@ -57,17 +58,21 @@ def start_socket():
     global live_data
     print("🚀 Starting Angel One WebSocket on Render...")
     
-    if not API_KEY or not CLIENT_ID:
+    if not API_KEY or not CLIENT_ID or not TOTP_KEY:
         print("❌ Error: API Keys not found in Environment Variables!")
         return
 
     try:
-        # Step A: Login
+        # Step A: Generate OTP (This was missing!)
+        print("🔐 Generating TOTP...")
+        totp = pyotp.TOTP(TOTP_KEY).now()
+        
+        # Step B: Login
         obj = SmartConnect(api_key=API_KEY)
-        data = obj.generateSession(CLIENT_ID, PASSWORD, TOTP_KEY)
+        data = obj.generateSession(CLIENT_ID, PASSWORD, totp)
         feed_token = obj.getfeedToken()
         
-        # Step B: Callbacks
+        # Step C: Callbacks
         def on_data(wsapp, msg):
             token = msg.get("token")
             ltp = msg.get("last_traded_price")
@@ -82,7 +87,7 @@ def start_socket():
         def on_error(wsapp, error):
             print(f"❌ Error: {error}")
 
-        # Step C: Connect
+        # Step D: Connect
         sws = SmartWebSocketV2(data["data"]["jwtToken"], API_KEY, CLIENT_ID, feed_token)
         sws.on_data = on_data
         sws.on_open = on_open
@@ -185,11 +190,9 @@ h1 { margin: 0; text-shadow: 0 0 10px var(--neon); font-size: 1.4rem; letter-spa
 <div class="footer-item">BANKNIFTY <span class="footer-val red">LIVE</span></div>
 </div>
 <script>
-// --- CHANGED: Added AM/PM format ---
 function updateTime(){
     const now = new Date(); 
     document.getElementById('date-display').innerText = now.toLocaleDateString('en-GB');
-    // येथे 'en-US' आणि 'hour12: true' वापरले आहे जेणेकरून AM/PM दिसेल
     document.getElementById('time-display').innerText = now.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', hour12: true});
 } 
 setInterval(updateTime,1000); 
@@ -224,7 +227,7 @@ def index():
         token = TOKEN_MAP.get(stock["name"])
         if token and token in live_data:
             stock["price"] = live_data[token]
-    # --- CHANGED: Reverted Title to Marathi ---
+            
     return render_template_string(HTML_TEMPLATE, title="कान्हादेशी ट्रेडर", stocks=STOCKS, signals=SIGNALS, has_error=SYSTEM_ERROR)
 
 if __name__ == '__main__':
