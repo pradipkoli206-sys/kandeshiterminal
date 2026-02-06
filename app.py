@@ -8,7 +8,7 @@ from SmartApi import SmartConnect
 app = Flask(__name__)
 SYSTEM_ERROR = False
 
-# --- 1. KEYS ---
+# --- 1. KEYS FROM RENDER ENVIRONMENT ---
 API_KEY = os.environ.get("API_KEY")
 CLIENT_ID = os.environ.get("CLIENT_ID")
 PASSWORD = os.environ.get("PASSWORD")
@@ -19,9 +19,18 @@ live_data = {}
 
 # --- 3. TOKEN MAPPING ---
 TOKEN_MAP = {
-    "RELIANCE": "2885", "TATASTEEL": "3499", "HDFCBANK": "1333", "INFY": "1594",
-    "SBIN": "3045", "ICICIBANK": "4963", "AXISBANK": "5900", "WIPRO": "3787",
-    "ADANIENT": "25", "MARUTI": "10999", "BAJFINANCE": "317", "ASIANPAINT": "236"
+    "RELIANCE": "2885",
+    "TATASTEEL": "3499",
+    "HDFCBANK": "1333",
+    "INFY": "1594",
+    "SBIN": "3045",
+    "ICICIBANK": "4963",
+    "AXISBANK": "5900",
+    "WIPRO": "3787",
+    "ADANIENT": "25",
+    "MARUTI": "10999",
+    "BAJFINANCE": "317",
+    "ASIANPAINT": "236"
 }
 
 STOCKS = [
@@ -40,63 +49,49 @@ STOCKS = [
 ]
 
 SIGNALS = [
-    {"symbol": "SYSTEM", "type": "INFO", "price": "0.00", "time": "LTP POLLING ACTIVE"}
+    {"symbol": "SYSTEM", "type": "INFO", "price": "0.00", "time": "1s UPDATE MODE"}
 ]
 
-# --- 4. LTP POLLING ENGINE (WebSocket काढले, हे टाकले) ---
-def start_polling_engine():
+# --- 4. ENGINE (FIXED FOR STABILITY) ---
+def start_engine():
     global live_data
-    print("🚀 Starting LTP Polling Engine...")
+    print("🚀 Starting Engine (Polling Mode)...")
     smart_api = None
     
     while True:
         try:
-            # लॉगिन चेक
             if smart_api is None:
-                try:
-                    totp = pyotp.TOTP(TOTP_KEY).now()
-                    smart_api = SmartConnect(api_key=API_KEY)
-                    data = smart_api.generateSession(CLIENT_ID, PASSWORD, totp)
-                    if not data['status']:
-                        print("❌ Login Failed")
-                        time.sleep(5)
-                        continue
-                    print("✅ Login Success (Polling Mode)")
-                except Exception as e:
-                    print(f"Login Error: {e}")
-                    time.sleep(5)
+                totp = pyotp.TOTP(TOTP_KEY).now()
+                smart_api = SmartConnect(api_key=API_KEY)
+                data = smart_api.generateSession(CLIENT_ID, PASSWORD, totp)
+                if not data['status']:
+                    time.sleep(10)
                     continue
 
-            # प्रत्येक स्टॉकचा भाव आणणे (Polling)
+            # दर १ सेकंदाला भाव अपडेट करण्याचा प्रयत्न
             for name, token in TOKEN_MAP.items():
                 try:
-                    # LTP DATA कॉल (कनेक्शन लागत नाही)
-                    # NSE मधील स्टॉकसाठी "-EQ" लावणे गरजेचे असते
-                    symbol_name = name + "-EQ" 
-                    res = smart_api.ltpData("NSE", symbol_name, token)
-                    
+                    # FIX: "-EQ" ऍड केले आहे कारण NSE ला त्याची गरज असते
+                    res = smart_api.ltpData("NSE", name + "-EQ", token)
                     if res and res['status']:
                         live_data[token] = res['data']['ltp']
-                except Exception as fetch_err:
+                except:
                     pass
-                
-                # API वर लोड येऊ नये म्हणून छोटा गॅप
-                time.sleep(0.05) 
+                time.sleep(0.04) # API Rate limit सेफ्टी
 
-            # 1 सेकंद थांबून पुन्हा अपडेट
-            time.sleep(1)
+            time.sleep(1) # १ सेकंदाचा गॅप
 
         except Exception as e:
-            print(f"⚠️ Engine Error: {e}")
-            smart_api = None # एरर आला तर पुन्हा लॉगिन करेल
+            print(f"⚠️ Error: {e}")
+            smart_api = None
             time.sleep(5)
 
-# इंजिन चालू करणे
-t = threading.Thread(target=start_polling_engine)
+# Start Thread
+t = threading.Thread(target=start_engine)
 t.daemon = True
 t.start()
 
-# --- 5. HTML TEMPLATE (तुझी तीच NEON डिझाईन - NO CHANGE) ---
+# --- 5. HTML TEMPLATE (YOUR ORIGINAL DESIGN - NO CHANGES) ---
 HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="mr">
 <head>
@@ -110,6 +105,8 @@ h1 { margin: 0; text-shadow: 0 0 10px var(--neon); font-size: 1.4rem; letter-spa
 .header-btn { background: transparent; border: 1px solid var(--neon); color: var(--neon); font-size: 0.6rem; font-weight: bold; padding: 8px 10px; border-radius: 5px; cursor: pointer; }
 .status-bar { display: flex; justify-content: center; gap: 5px; font-size: 0.75rem; font-weight: bold; color: #ccc; }
 .status-item { border: 1px solid var(--neon); padding: 2px 5px; border-radius: 4px; background: rgba(0, 242, 255, 0.1); color: var(--neon); }
+.error-active { animation: blink-red 1s infinite; font-weight: 900; border-color: var(--red) !important; color: var(--red) !important; }
+@keyframes blink-red { 0%, 100% { background-color: rgba(255, 51, 51, 0.1); } 50% { background-color: var(--red); color: #000; } }
 .split-container { display: flex; flex: 1; overflow: hidden; width: 100%; }
 .panel { width: 50%; padding: 10px; padding-bottom: 100px; overflow-y: auto; display: flex; flex-direction: column; }
 .vertical-separator { width: 2px; background: var(--neon); box-shadow: 0 0 15px var(--neon); height: 100%; }
@@ -123,7 +120,9 @@ h1 { margin: 0; text-shadow: 0 0 10px var(--neon); font-size: 1.4rem; letter-spa
 .sig-info { display: flex; flex-direction: column; gap: 2px; }
 .sig-symbol { font-size: 0.9rem; font-weight: 900; color: #fff; }
 .sig-price { font-size: 0.7rem; color: #888; }
-.sig-badge { padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 0.7rem; color: #000; background: var(--green); }
+.sig-badge { padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 0.7rem; color: #000; }
+.badge-buy { background: var(--green); box-shadow: 0 0 8px var(--green); }
+.badge-sell { background: var(--red); box-shadow: 0 0 8px var(--red); }
 .details-btn { background: transparent; border: 1px solid var(--neon); color: var(--neon); padding: 5px 15px; border-radius: 4px; font-size: 0.7rem; font-weight: bold; text-transform: uppercase; cursor: pointer; width: 100%; text-align: center; }
 .details-btn:hover { background: var(--neon); color: #000; box-shadow: 0 0 8px var(--neon); }
 .calc-box { margin-top: 15px; background: rgba(0, 242, 255, 0.05); border: 1px dashed var(--neon); border-radius: 8px; padding: 15px; display: flex; flex-direction: column; gap: 10px; }
@@ -145,7 +144,7 @@ function updateTime(){
 setInterval(updateTime,1000); 
 updateTime();
 
-// LTP पोलिंगसाठी Auto-Refresh (दर 1 सेकंदाने)
+// दर १ सेकंदाला पेज रिफ्रेश करून नवीन भाव दाखवा
 setInterval(function(){ location.reload(); }, 1000);
 
 function calculateQty(){
