@@ -1,5 +1,5 @@
 import os
-import pyotp  # <-- नवीन लायब्ररी (OTP जनरेट करण्यासाठी)
+import pyotp
 from flask import Flask, render_template_string
 from SmartApi import SmartConnect
 from SmartApi.smartWebSocketV2 import SmartWebSocketV2
@@ -53,7 +53,7 @@ SIGNALS = [
     {"symbol": "SYSTEM", "type": "INFO", "price": "0.00", "time": "WAITING FOR DATA..."}
 ]
 
-# --- 4. WEBSOCKET ENGINE ---
+# --- 4. WEBSOCKET ENGINE (DEBUG MODE ADDED) ---
 def start_socket():
     global live_data
     print("🚀 Starting Angel One WebSocket on Render...")
@@ -63,13 +63,28 @@ def start_socket():
         return
 
     try:
-        # Step A: Generate OTP (This was missing!)
+        # Step A: Generate OTP
         print("🔐 Generating TOTP...")
-        totp = pyotp.TOTP(TOTP_KEY).now()
+        try:
+            totp = pyotp.TOTP(TOTP_KEY).now()
+        except Exception as e:
+            print(f"❌ TOTP Error: {e} (Check TOTP_KEY in Render)")
+            return
         
-        # Step B: Login
+        # Step B: Login with DEBUG PRINTS
+        print(f"📡 Sending Login Request for {CLIENT_ID}...")
         obj = SmartConnect(api_key=API_KEY)
         data = obj.generateSession(CLIENT_ID, PASSWORD, totp)
+        
+        # --- जासूसी ओळ (ही ओळ महत्वाची आहे) ---
+        print(f"🕵️ ANGEL ONE SERVER RESPONSE: {data}") 
+        # -------------------------------------
+
+        if data['status'] == False:
+            print(f"❌ LOGIN FAILED: {data['message']}")
+            print(f"⚠️ Error Code: {data['errorcode']}")
+            return
+
         feed_token = obj.getfeedToken()
         
         # Step C: Callbacks
@@ -80,12 +95,12 @@ def start_socket():
                 live_data[token] = ltp / 100
 
         def on_open(wsapp):
-            print("✅ WebSocket Connected!")
+            print("✅ WebSocket Connected! (Market Data Incoming)")
             token_list = list(TOKEN_MAP.values())
             wsapp.subscribe("correlation_id", 1, [{"exchangeType": 1, "tokens": token_list}])
 
         def on_error(wsapp, error):
-            print(f"❌ Error: {error}")
+            print(f"❌ Socket Error: {error}")
 
         # Step D: Connect
         sws = SmartWebSocketV2(data["data"]["jwtToken"], API_KEY, CLIENT_ID, feed_token)
@@ -102,7 +117,7 @@ t = threading.Thread(target=start_socket)
 t.daemon = True
 t.start()
 
-# --- 5. HTML TEMPLATE ---
+# --- 5. HTML TEMPLATE (SAME AS YOURS) ---
 HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="mr">
 <head>
