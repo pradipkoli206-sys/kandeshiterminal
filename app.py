@@ -53,13 +53,13 @@ SIGNALS = [
     {"symbol": "SYSTEM", "type": "INFO", "price": "0.00", "time": "WAITING FOR DATA..."}
 ]
 
-# --- 4. WEBSOCKET ENGINE (DEBUG MODE ADDED) ---
+# --- 4. WEBSOCKET ENGINE (WITH 5 SECOND DELAY FIX) ---
 def start_socket():
     global live_data
-    print("🚀 Starting Angel One WebSocket on Render...")
+    print("🚀 Starting Angel One WebSocket...")
     
     if not API_KEY or not CLIENT_ID or not TOTP_KEY:
-        print("❌ Error: API Keys not found in Environment Variables!")
+        print("❌ Error: API Keys are MISSING in Render Environment!")
         return
 
     try:
@@ -68,26 +68,27 @@ def start_socket():
         try:
             totp = pyotp.TOTP(TOTP_KEY).now()
         except Exception as e:
-            print(f"❌ TOTP Error: {e} (Check TOTP_KEY in Render)")
+            print(f"❌ TOTP Error: {e}")
             return
         
-        # Step B: Login with DEBUG PRINTS
-        print(f"📡 Sending Login Request for {CLIENT_ID}...")
+        # Step B: Login
+        print(f"📡 Logging in for {CLIENT_ID}...")
         obj = SmartConnect(api_key=API_KEY)
         data = obj.generateSession(CLIENT_ID, PASSWORD, totp)
         
-        # --- जासूसी ओळ (ही ओळ महत्वाची आहे) ---
-        print(f"🕵️ ANGEL ONE SERVER RESPONSE: {data}") 
-        # -------------------------------------
-
         if data['status'] == False:
             print(f"❌ LOGIN FAILED: {data['message']}")
-            print(f"⚠️ Error Code: {data['errorcode']}")
             return
 
+        print("✅ Login Success! Token Received.")
+        
+        # --- महत्त्वाची ओळ: 5 सेकंद थांबणे ---
+        print("⏳ Waiting 5 seconds to clear old connections...")
+        time.sleep(5)
+        # ----------------------------------
+        
         feed_token = obj.getfeedToken()
         
-        # Step C: Callbacks
         def on_data(wsapp, msg):
             token = msg.get("token")
             ltp = msg.get("last_traded_price")
@@ -110,14 +111,14 @@ def start_socket():
         sws.connect()
         
     except Exception as e:
-        print(f"⚠️ Connection Failed: {e}")
+        print(f"⚠️ SYSTEM ERROR: {e}")
 
 # Start Thread
 t = threading.Thread(target=start_socket)
 t.daemon = True
 t.start()
 
-# --- 5. HTML TEMPLATE (SAME AS YOURS) ---
+# --- 5. HTML TEMPLATE (NEON DESIGN - NO CHANGE) ---
 HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="mr">
 <head>
