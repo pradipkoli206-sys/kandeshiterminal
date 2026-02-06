@@ -4,129 +4,99 @@ import time
 import threading
 from flask import Flask, render_template_string
 from SmartApi import SmartConnect
-from SmartApi.smartWebSocketV2 import SmartWebSocketV2
 
 app = Flask(__name__)
-SYSTEM_ERROR = False
 
-# --- 1. KEYS FROM RENDER ENVIRONMENT ---
+# --- 1. KEYS ---
 API_KEY = os.environ.get("API_KEY")
 CLIENT_ID = os.environ.get("CLIENT_ID")
 PASSWORD = os.environ.get("PASSWORD")
 TOTP_KEY = os.environ.get("TOTP_KEY")
 
-# --- 2. LIVE DATA STORE ---
+# --- 2. DATA STORE ---
 live_data = {} 
-
-# --- 3. TOKEN MAPPING (FULL LIST) ---
 TOKEN_MAP = {
-    "RELIANCE": "2885",
-    "TATASTEEL": "3499",
-    "HDFCBANK": "1333",
-    "INFY": "1594",
-    "SBIN": "3045",
-    "ICICIBANK": "4963",
-    "AXISBANK": "5900",
-    "WIPRO": "3787",
-    "ADANIENT": "25",
-    "MARUTI": "10999",
-    "BAJFINANCE": "317",
-    "ASIANPAINT": "236"
+    "RELIANCE": "2885", "TATASTEEL": "3499", "HDFCBANK": "1333", "INFY": "1594",
+    "SBIN": "3045", "ICICIBANK": "4963", "AXISBANK": "5900", "WIPRO": "3787",
+    "ADANIENT": "25", "MARUTI": "10999", "BAJFINANCE": "317", "ASIANPAINT": "236"
 }
+STOCKS = [{"name": k, "price": 0.00, "sig": "WAIT"} for k in TOKEN_MAP.keys()]
+SIGNALS = [{"symbol": "SYSTEM", "type": "INFO", "price": "0.00", "time": "Running HTTP Mode"}]
 
-STOCKS = [
-    {"name": "RELIANCE", "price": 0.00, "sig": "WAIT"},
-    {"name": "TATASTEEL", "price": 0.00, "sig": "WAIT"},
-    {"name": "HDFCBANK", "price": 0.00, "sig": "WAIT"},
-    {"name": "INFY", "price": 0.00, "sig": "WAIT"},
-    {"name": "SBIN", "price": 0.00, "sig": "NONE"},
-    {"name": "ICICIBANK", "price": 0.00, "sig": "NONE"},
-    {"name": "AXISBANK", "price": 0.00, "sig": "NONE"},
-    {"name": "WIPRO", "price": 0.00, "sig": "NONE"},
-    {"name": "ADANIENT", "price": 0.00, "sig": "NONE"},
-    {"name": "MARUTI", "price": 0.00, "sig": "NONE"},
-    {"name": "BAJFINANCE", "price": 0.00, "sig": "NONE"},
-    {"name": "ASIANPAINT", "price": 0.00, "sig": "NONE"}
-]
-
-SIGNALS = [
-    {"symbol": "SYSTEM", "type": "INFO", "price": "0.00", "time": "WAITING FOR DATA..."}
-]
-
-# --- 4. WEBSOCKET ENGINE (AUTO-RECONNECT MODE) ---
-def start_socket():
+# --- 3. THE UNBREAKABLE ENGINE (HTTP POLLING) ---
+def start_polling_engine():
     global live_data
-    print("🚀 Starting Kanhadeshi Trader Engine...")
+    print("🚀 Starting Permanent HTTP Engine...")
     
-    while True: # <--- हे कधीच थांबणार नाही (Infinite Loop)
+    smart_api = None
+    
+    while True:
         try:
-            print("⏳ Checking connection...")
-            
-            if not API_KEY or not CLIENT_ID or not TOTP_KEY:
-                print("❌ Keys Missing in Environment!")
-                time.sleep(20)
-                continue
+            # 1. Login Check (फक्त एकदाच लॉगिन करेल)
+            if smart_api is None:
+                if not API_KEY or not TOTP_KEY:
+                    print("❌ Keys Missing!")
+                    time.sleep(10)
+                    continue
+                
+                print("📡 Connecting to Angel One API...")
+                try:
+                    totp = pyotp.TOTP(TOTP_KEY).now()
+                    smart_api = SmartConnect(api_key=API_KEY)
+                    data = smart_api.generateSession(CLIENT_ID, PASSWORD, totp)
+                    
+                    if data['status']:
+                        print("✅ Login Success! Engine Started.")
+                    else:
+                        print(f"❌ Login Failed: {data['message']}")
+                        smart_api = None
+                        time.sleep(10)
+                        continue
+                except Exception as e:
+                    print(f"⚠️ Login Error: {e}")
+                    time.sleep(10)
+                    continue
 
-            # 1. Login Logic
+            # 2. Fetch Prices (हे कधीच Connection Closed देत नाही)
             try:
-                totp = pyotp.TOTP(TOTP_KEY).now()
+                # सर्व स्टॉकचे Tokens एकत्र करणे
+                exchange = "NSE"
+                tokens = list(TOKEN_MAP.values())
+                
+                # API ला विचारणे: "भाव काय आहे?"
+                for stock_name, token in TOKEN_MAP.items():
+                    # एका वेळी एक भाव आणणे (Safe Mode)
+                    quote = smart_api.ltpData(exchange, stock_name, token)
+                    
+                    if quote and quote['status'] and 'data' in quote:
+                        ltp = quote['data']['ltp']
+                        live_data[token] = ltp
+                        # print(f"Tick: {stock_name} -> {ltp}") # हवे असेल तर हे अनकमेंट कर
+                    
+                    # API वर लोड येऊ नये म्हणून छोटा ब्रेक
+                    time.sleep(0.2) 
+
             except Exception as e:
-                print(f"❌ TOTP Error: {e}")
-                time.sleep(10)
-                continue
+                print(f"⚠️ Fetch Error (Retrying): {e}")
+                # जर Session Expire झाले, तर पुन्हा लॉगिन करण्यासाठी Reset करणे
+                if "Invalid" in str(e) or "Session" in str(e):
+                    print("🔄 Session Expired. Re-logging in...")
+                    smart_api = None
 
-            print(f"📡 Logging in for {CLIENT_ID}...")
-            obj = SmartConnect(api_key=API_KEY)
-            data = obj.generateSession(CLIENT_ID, PASSWORD, totp)
-            
-            if not data['status']:
-                print(f"❌ Login Failed: {data['message']}")
-                time.sleep(10)
-                continue
+            # 3. Wait (Loop Delay)
+            # दर 2 सेकंदांनी भाव अपडेट होईल. 
+            time.sleep(2)
 
-            print("✅ Login Success! Connecting Socket...")
-            feed_token = obj.getfeedToken()
-            
-            # 2. WebSocket Logic
-            sws = SmartWebSocketV2(data["data"]["jwtToken"], API_KEY, CLIENT_ID, feed_token)
-
-            def on_data(wsapp, msg):
-                token = msg.get("token")
-                ltp = msg.get("last_traded_price")
-                if token and ltp:
-                    live_data[token] = ltp / 100
-            
-            def on_open(wsapp):
-                print("✅ WebSocket Connected! (Market Data Incoming)")
-                token_list = list(TOKEN_MAP.values())
-                wsapp.subscribe("correlation_id", 1, [{"exchangeType": 1, "tokens": token_list}])
-
-            def on_error(wsapp, error):
-                print(f"❌ Socket Error: {error}")
-            
-            def on_close(wsapp):
-                print("⚠️ Connection Closed by Server.")
-
-            sws.on_data = on_data
-            sws.on_open = on_open
-            sws.on_error = on_error
-            sws.on_close = on_close
-            
-            # ही लाईन कनेक्शन टिकवून ठेवते. जर तुटले तर कोड खाली जाईल.
-            sws.connect() 
-            
-        except Exception as e:
-            print(f"⚠️ Critical System Error: {e}")
-            
-        print("🔄 Reconnecting in 5 seconds...")
-        time.sleep(5)
+        except Exception as main_e:
+            print(f"⚠️ Critical Error: {main_e}")
+            time.sleep(5)
 
 # Start Background Thread
-t = threading.Thread(target=start_socket)
+t = threading.Thread(target=start_polling_engine)
 t.daemon = True
 t.start()
 
-# --- 5. HTML TEMPLATE (EXACT ORIGINAL NEON DESIGN) ---
+# --- 4. HTML TEMPLATE (SAME NEON DESIGN) ---
 HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="mr">
 <head>
@@ -244,7 +214,7 @@ res.style.background=bgColor; res.style.color=txtColor; res.style.boxShadow=shad
 </html>
 '''
 
-# --- 6. ROUTE ---
+# --- 5. ROUTE ---
 @app.route('/')
 def index():
     for stock in STOCKS:
@@ -255,6 +225,5 @@ def index():
     return render_template_string(HTML_TEMPLATE, title="कान्हादेशी ट्रेडर", stocks=STOCKS, signals=SIGNALS, has_error=SYSTEM_ERROR)
 
 if __name__ == '__main__':
-    # Render साठी पोर्ट सेटिंग (Start Command: python app.py)
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
