@@ -16,41 +16,40 @@ TOTP_KEY = os.environ.get("TOTP_KEY")
 # --- 2. DATA STORE ---
 live_data = {} 
 
-# --- 3. TOKEN MAP (Token ani Naav) ---
+# --- 3. TOKEN MAP ---
 TOKEN_MAP = {
     "RELIANCE": "2885", "TATASTEEL": "3499", "HDFCBANK": "1333", "INFY": "1594",
     "SBIN": "3045", "ICICIBANK": "4963", "AXISBANK": "5900", "WIPRO": "3787",
     "ADANIENT": "25", "MARUTI": "10999", "BAJFINANCE": "317", "ASIANPAINT": "236"
 }
 
-# --- 4. STOCK LIST (Tuzya Original Design sathi structure) ---
+# --- 4. STOCK LIST (FIXED: Added 'token' key explicitly) ---
 STOCKS = [
-    {"name": "RELIANCE", "price": 0.00, "sig": "WAIT"},
-    {"name": "TATASTEEL", "price": 0.00, "sig": "WAIT"},
-    {"name": "HDFCBANK", "price": 0.00, "sig": "WAIT"},
-    {"name": "INFY", "price": 0.00, "sig": "WAIT"},
-    {"name": "SBIN", "price": 0.00, "sig": "NONE"},
-    {"name": "ICICIBANK", "price": 0.00, "sig": "NONE"},
-    {"name": "AXISBANK", "price": 0.00, "sig": "NONE"},
-    {"name": "WIPRO", "price": 0.00, "sig": "NONE"},
-    {"name": "ADANIENT", "price": 0.00, "sig": "NONE"},
-    {"name": "MARUTI", "price": 0.00, "sig": "NONE"},
-    {"name": "BAJFINANCE", "price": 0.00, "sig": "NONE"},
-    {"name": "ASIANPAINT", "price": 0.00, "sig": "NONE"}
+    {"name": "RELIANCE", "price": 0.00, "sig": "WAIT", "token": "2885"},
+    {"name": "TATASTEEL", "price": 0.00, "sig": "WAIT", "token": "3499"},
+    {"name": "HDFCBANK", "price": 0.00, "sig": "WAIT", "token": "1333"},
+    {"name": "INFY", "price": 0.00, "sig": "WAIT", "token": "1594"},
+    {"name": "SBIN", "price": 0.00, "sig": "NONE", "token": "3045"},
+    {"name": "ICICIBANK", "price": 0.00, "sig": "NONE", "token": "4963"},
+    {"name": "AXISBANK", "price": 0.00, "sig": "NONE", "token": "5900"},
+    {"name": "WIPRO", "price": 0.00, "sig": "NONE", "token": "3787"},
+    {"name": "ADANIENT", "price": 0.00, "sig": "NONE", "token": "25"},
+    {"name": "MARUTI", "price": 0.00, "sig": "NONE", "token": "10999"},
+    {"name": "BAJFINANCE", "price": 0.00, "sig": "NONE", "token": "317"},
+    {"name": "ASIANPAINT", "price": 0.00, "sig": "NONE", "token": "236"}
 ]
 
 SIGNALS = [
-    {"symbol": "SYSTEM", "type": "INFO", "price": "0.00", "time": "LIVE DATA ON"}
+    {"symbol": "SYSTEM", "type": "INFO", "price": "0.00", "time": "LIVE"}
 ]
 
-# --- 5. ENGINE (Data Load Problem Fixed Here) ---
+# --- 5. ENGINE (Robust HTTP Polling) ---
 def start_engine():
     global live_data
     smart_api = None
     
     while True:
         try:
-            # Login Logic
             if smart_api is None:
                 totp = pyotp.TOTP(TOTP_KEY).now()
                 smart_api = SmartConnect(api_key=API_KEY)
@@ -59,18 +58,17 @@ def start_engine():
                     time.sleep(5)
                     continue
 
-            # Fetch Data (Polling)
-            for name, token in TOKEN_MAP.items():
+            for stock in STOCKS:
                 try:
-                    # Fix: Added "-EQ" here so data loads correctly
-                    res = smart_api.ltpData("NSE", name + "-EQ", token)
+                    # Using token directly from the list
+                    res = smart_api.ltpData("NSE", stock["name"] + "-EQ", stock["token"])
                     if res and res['status']:
-                        live_data[token] = res['data']['ltp']
+                        live_data[stock["token"]] = res['data']['ltp']
                 except:
                     pass
                 time.sleep(0.05) 
             
-            time.sleep(1) # Refresh Rate
+            time.sleep(1)
 
         except:
             smart_api = None
@@ -80,7 +78,7 @@ t = threading.Thread(target=start_engine)
 t.daemon = True
 t.start()
 
-# --- 6. HTML (TUZI ORIGINAL NEON DESIGN - NO CHANGE) ---
+# --- 6. HTML (ORIGINAL NEON DESIGN) ---
 HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="mr">
 <head>
@@ -131,7 +129,7 @@ function updateTime(){
 setInterval(updateTime,1000); 
 updateTime();
 
-// AUTO REFRESH (1.5 Seconds)
+// AUTO REFRESH (1.5s)
 setInterval(function(){ location.reload(); }, 1500);
 
 function calculateQty(){
@@ -159,10 +157,10 @@ res.style.background=bgColor; res.style.color=txtColor; res.style.boxShadow=shad
 # --- 7. ROUTE ---
 @app.route('/')
 def index():
-    # Data Map Karun Price Update Karne
+    # Update Price safely
     for stock in STOCKS:
-        token = TOKEN_MAP.get(stock["name"])
-        if token and token in live_data:
+        token = stock["token"]
+        if token in live_data:
             stock["price"] = live_data[token]
             
     return render_template_string(HTML_TEMPLATE, title="कान्हादेशी ट्रेडर", stocks=STOCKS, signals=SIGNALS)
