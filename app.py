@@ -1,5 +1,6 @@
 import os
 import pyotp
+import socket  # <-- ही नवीन सेफ्टी लायब्ररी
 from flask import Flask, render_template_string
 from SmartApi import SmartConnect
 from SmartApi.smartWebSocketV2 import SmartWebSocketV2
@@ -9,83 +10,65 @@ import time
 app = Flask(__name__)
 SYSTEM_ERROR = False
 
-# --- 1. KEYS FROM RENDER ENVIRONMENT ---
+# --- 1. KEYS ---
 API_KEY = os.environ.get("API_KEY")
 CLIENT_ID = os.environ.get("CLIENT_ID")
 PASSWORD = os.environ.get("PASSWORD")
 TOTP_KEY = os.environ.get("TOTP_KEY")
 
-# --- 2. LIVE DATA STORE ---
+# --- 2. STORAGE ---
 live_data = {} 
-
-# --- 3. TOKEN MAPPING ---
 TOKEN_MAP = {
-    "RELIANCE": "2885",
-    "TATASTEEL": "3499",
-    "HDFCBANK": "1333",
-    "INFY": "1594",
-    "SBIN": "3045",
-    "ICICIBANK": "4963",
-    "AXISBANK": "5900",
-    "WIPRO": "3787",
-    "ADANIENT": "25",
-    "MARUTI": "10999",
-    "BAJFINANCE": "317",
-    "ASIANPAINT": "236"
+    "RELIANCE": "2885", "TATASTEEL": "3499", "HDFCBANK": "1333", "INFY": "1594", 
+    "SBIN": "3045", "ICICIBANK": "4963", "AXISBANK": "5900", "WIPRO": "3787", 
+    "ADANIENT": "25", "MARUTI": "10999", "BAJFINANCE": "317", "ASIANPAINT": "236"
 }
+STOCKS = [{"name": k, "price": 0.00, "sig": "WAIT"} for k in TOKEN_MAP.keys()]
+SIGNALS = [{"symbol": "SYSTEM", "type": "INFO", "price": "0.00", "time": "WAITING..."}]
 
-STOCKS = [
-    {"name": "RELIANCE", "price": 0.00, "sig": "WAIT"},
-    {"name": "TATASTEEL", "price": 0.00, "sig": "WAIT"},
-    {"name": "HDFCBANK", "price": 0.00, "sig": "WAIT"},
-    {"name": "INFY", "price": 0.00, "sig": "WAIT"},
-    {"name": "SBIN", "price": 0.00, "sig": "NONE"},
-    {"name": "ICICIBANK", "price": 0.00, "sig": "NONE"},
-    {"name": "AXISBANK", "price": 0.00, "sig": "NONE"},
-    {"name": "WIPRO", "price": 0.00, "sig": "NONE"},
-    {"name": "ADANIENT", "price": 0.00, "sig": "NONE"},
-    {"name": "MARUTI", "price": 0.00, "sig": "NONE"},
-    {"name": "BAJFINANCE", "price": 0.00, "sig": "NONE"},
-    {"name": "ASIANPAINT", "price": 0.00, "sig": "NONE"}
-]
+# --- 3. THE SINGLE INSTANCE LOCK (BRAHMASTRA) ---
+# हे फक्शन ठरवेल की कोण "Master" आहे आणि कोण "Duplicate"
+def is_instance_already_running():
+    try:
+        # आपण एक खोटा पोर्ट 12345 पकडून ठेवू
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(("127.0.0.1", 12345))
+        s.detach() # पोर्ट पकडून ठेव, सोडू नकोस
+        return False # म्हणजे हा डुप्लिकेट नाही, हाच राजा आहे!
+    except socket.error:
+        return True # म्हणजे पोर्ट आधीच कुणीतरी पकडलाय, हा डुप्लिकेट आहे!
 
-SIGNALS = [
-    {"symbol": "SYSTEM", "type": "INFO", "price": "0.00", "time": "WAITING FOR DATA..."}
-]
-
-# --- 4. WEBSOCKET ENGINE (WITH 5 SECOND DELAY FIX) ---
+# --- 4. ENGINE ---
 def start_socket():
     global live_data
-    print("🚀 Starting Angel One WebSocket...")
+    
+    # --- CHECK LOCK ---
+    if is_instance_already_running():
+        print("🛑 BLOCKING DUPLICATE INSTANCE: I will NOT connect to Angel One.")
+        return # इथेच थांब! पुढे जाऊ नकोस.
+
+    print("🚀 I AM THE MASTER INSTANCE: Starting WebSocket...")
     
     if not API_KEY or not CLIENT_ID or not TOTP_KEY:
-        print("❌ Error: API Keys are MISSING in Render Environment!")
+        print("❌ Error: Keys Missing!")
         return
 
     try:
-        # Step A: Generate OTP
+        # Login Process
         print("🔐 Generating TOTP...")
-        try:
-            totp = pyotp.TOTP(TOTP_KEY).now()
-        except Exception as e:
-            print(f"❌ TOTP Error: {e}")
-            return
+        totp = pyotp.TOTP(TOTP_KEY).now()
         
-        # Step B: Login
         print(f"📡 Logging in for {CLIENT_ID}...")
         obj = SmartConnect(api_key=API_KEY)
         data = obj.generateSession(CLIENT_ID, PASSWORD, totp)
         
         if data['status'] == False:
-            print(f"❌ LOGIN FAILED: {data['message']}")
+            print(f"❌ Login Failed: {data['message']}")
             return
 
         print("✅ Login Success! Token Received.")
-        
-        # --- महत्त्वाची ओळ: 5 सेकंद थांबणे ---
-        print("⏳ Waiting 5 seconds to clear old connections...")
-        time.sleep(5)
-        # ----------------------------------
+        print("⏳ Safety Wait 3 seconds...")
+        time.sleep(3)
         
         feed_token = obj.getfeedToken()
         
@@ -96,14 +79,13 @@ def start_socket():
                 live_data[token] = ltp / 100
 
         def on_open(wsapp):
-            print("✅ WebSocket Connected! (Market Data Incoming)")
+            print("✅ WebSocket Connected! (Streaming Started)")
             token_list = list(TOKEN_MAP.values())
             wsapp.subscribe("correlation_id", 1, [{"exchangeType": 1, "tokens": token_list}])
 
         def on_error(wsapp, error):
             print(f"❌ Socket Error: {error}")
 
-        # Step D: Connect
         sws = SmartWebSocketV2(data["data"]["jwtToken"], API_KEY, CLIENT_ID, feed_token)
         sws.on_data = on_data
         sws.on_open = on_open
@@ -111,14 +93,14 @@ def start_socket():
         sws.connect()
         
     except Exception as e:
-        print(f"⚠️ SYSTEM ERROR: {e}")
+        print(f"⚠️ Error: {e}")
 
 # Start Thread
 t = threading.Thread(target=start_socket)
 t.daemon = True
 t.start()
 
-# --- 5. HTML TEMPLATE (NEON DESIGN - NO CHANGE) ---
+# --- 5. HTML TEMPLATE (SAME NEON DESIGN) ---
 HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="mr">
 <head>
