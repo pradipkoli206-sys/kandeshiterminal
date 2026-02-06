@@ -13,41 +13,31 @@ CLIENT_ID = os.environ.get("CLIENT_ID")
 PASSWORD = os.environ.get("PASSWORD")
 TOTP_KEY = os.environ.get("TOTP_KEY")
 
-# --- 2. DATA STORE ---
 live_data = {} 
 
-# --- 3. TOKEN MAP ---
+# --- 2. DATA SETUP (Everything you need) ---
 TOKEN_MAP = {
     "RELIANCE": "2885", "TATASTEEL": "3499", "HDFCBANK": "1333", "INFY": "1594",
     "SBIN": "3045", "ICICIBANK": "4963", "AXISBANK": "5900", "WIPRO": "3787",
     "ADANIENT": "25", "MARUTI": "10999", "BAJFINANCE": "317", "ASIANPAINT": "236"
 }
 
-# --- 4. STOCK LIST (FIXED: Added 'token' key explicitly) ---
-STOCKS = [
-    {"name": "RELIANCE", "price": 0.00, "sig": "WAIT", "token": "2885"},
-    {"name": "TATASTEEL", "price": 0.00, "sig": "WAIT", "token": "3499"},
-    {"name": "HDFCBANK", "price": 0.00, "sig": "WAIT", "token": "1333"},
-    {"name": "INFY", "price": 0.00, "sig": "WAIT", "token": "1594"},
-    {"name": "SBIN", "price": 0.00, "sig": "NONE", "token": "3045"},
-    {"name": "ICICIBANK", "price": 0.00, "sig": "NONE", "token": "4963"},
-    {"name": "AXISBANK", "price": 0.00, "sig": "NONE", "token": "5900"},
-    {"name": "WIPRO", "price": 0.00, "sig": "NONE", "token": "3787"},
-    {"name": "ADANIENT", "price": 0.00, "sig": "NONE", "token": "25"},
-    {"name": "MARUTI", "price": 0.00, "sig": "NONE", "token": "10999"},
-    {"name": "BAJFINANCE", "price": 0.00, "sig": "NONE", "token": "317"},
-    {"name": "ASIANPAINT", "price": 0.00, "sig": "NONE", "token": "236"}
-]
+# तुझी पूर्ण यादी (Watchlist साठी)
+STOCKS = []
+for name, token in TOKEN_MAP.items():
+    STOCKS.append({"name": name, "token": token, "price": "0.00", "sig": "WAIT"})
 
+# तुझे सिग्नल्स (Signals Panel साठी)
 SIGNALS = [
-    {"symbol": "SYSTEM", "type": "INFO", "price": "0.00", "time": "LIVE"}
+    {"symbol": "BANKNIFTY", "type": "BUY", "price": "41500.00", "time": "09:15 AM"},
+    {"symbol": "RELIANCE", "type": "SELL", "price": "2450.00", "time": "10:30 AM"},
+    {"symbol": "SYSTEM", "type": "INFO", "price": "0.00", "time": "LIVE MODE"}
 ]
 
-# --- 5. ENGINE (Robust HTTP Polling) ---
+# --- 3. ENGINE (Black Screen Fix Engine) ---
 def start_engine():
     global live_data
     smart_api = None
-    
     while True:
         try:
             if smart_api is None:
@@ -58,18 +48,15 @@ def start_engine():
                     time.sleep(5)
                     continue
 
-            for stock in STOCKS:
+            for name, token in TOKEN_MAP.items():
                 try:
-                    # Using token directly from the list
-                    res = smart_api.ltpData("NSE", stock["name"] + "-EQ", stock["token"])
+                    res = smart_api.ltpData("NSE", name + "-EQ", token)
                     if res and res['status']:
-                        live_data[stock["token"]] = res['data']['ltp']
+                        live_data[token] = res['data']['ltp']
                 except:
                     pass
-                time.sleep(0.05) 
-            
+                time.sleep(0.05)
             time.sleep(1)
-
         except:
             smart_api = None
             time.sleep(5)
@@ -78,12 +65,12 @@ t = threading.Thread(target=start_engine)
 t.daemon = True
 t.start()
 
-# --- 6. HTML (ORIGINAL NEON DESIGN) ---
+# --- 4. HTML TEMPLATE (THIS IS YOUR FULL DESIGN) ---
 HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="mr">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{ title }}</title>
+<title>कान्हादेशी ट्रेडर</title>
 <style>
 :root { --bg: #02040a; --card: #0d1117; --neon: #00f2ff; --green: #00ff66; --red: #ff3333; }
 body { background: var(--bg); color: #fff; font-family: sans-serif; margin: 0; padding-bottom: 80px; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
@@ -129,7 +116,7 @@ function updateTime(){
 setInterval(updateTime,1000); 
 updateTime();
 
-// AUTO REFRESH (1.5s)
+// AUTO REFRESH (1.5 Sec)
 setInterval(function(){ location.reload(); }, 1500);
 
 function calculateQty(){
@@ -150,18 +137,65 @@ res.innerHTML=`${actionText} <b>${qty}</b> QTY<br><span style="font-size:0.7rem"
 res.style.background=bgColor; res.style.color=txtColor; res.style.boxShadow=shadow; res.style.border="none";
 }
 </script>
+</head>
+<body>
+<div class="header">
+<div class="header-left"><button class="header-btn">LOGS</button></div>
+<div class="header-center"><h1>🔱 {{ title }}</h1><div class="status-bar"><div class="status-item" id="date-display">--/--</div><div class="status-item" id="time-display">--:--</div><div class="status-item">LIVE</div></div></div>
+<div class="header-right"><button class="header-btn">HISTORY</button></div>
+</div>
+
+<div class="split-container">
+<div class="panel">
+<div class="title-box">WATCHLIST</div>
+{% for stock in stocks %}
+<div class="pro-card">
+<div class="stock-name">{{ stock.name }}</div><div class="stock-price">₹{{ stock.price }}</div><button class="pin-btn">📌</button>
+</div>
+{% endfor %}
+</div>
+
+<div class="vertical-separator"></div>
+
+<div class="panel">
+<div class="title-box">SIGNALS</div>
+{% for sig in signals %}
+<div class="signal-card">
+<div class="sig-top-row">
+<div class="sig-info"><div class="sig-symbol">{{ sig.symbol }}</div><div class="sig-price">@ {{ sig.price }} | {{ sig.time }}</div></div>
+<div class="sig-badge {% if sig.type == 'BUY' %}badge-buy{% elif sig.type == 'SELL' %}badge-sell{% else %}badge-buy{% endif %}">{{ sig.type }}</div>
+</div>
+<button class="details-btn">DETAILS</button>
+</div>
+{% endfor %}
+
+<div class="calc-box">
+<div class="calc-title">🔢 QTY CALCULATOR</div>
+<input type="number" id="userCapital" class="calc-input" placeholder="Enter Capital (₹)" oninput="calculateQty()">
+<select id="stockSelect" class="calc-select" onchange="calculateQty()">
+<option value="0" data-sig="NONE">-- Select Stock --</option>
+{% for stock in stocks %}<option value="{{ stock.price }}" data-sig="BUY">{{ stock.name }}</option>{% endfor %}
+</select>
+<div id="calcResult" class="calc-result">RESULT</div>
+</div>
+</div>
+</div>
+
+<div class="footer">
+<div class="footer-item">NIFTY <span class="footer-val">LIVE</span></div>
+<div class="footer-item">BANKNIFTY <span class="footer-val red">LIVE</span></div>
+</div>
 </body>
 </html>
 '''
 
-# --- 7. ROUTE ---
+# --- 5. ROUTE ---
 @app.route('/')
 def index():
-    # Update Price safely
+    # Update data for HTML
     for stock in STOCKS:
         token = stock["token"]
-        if token in live_data:
-            stock["price"] = live_data[token]
+        stock["price"] = live_data.get(token, "0.00")
             
     return render_template_string(HTML_TEMPLATE, title="कान्हादेशी ट्रेडर", stocks=STOCKS, signals=SIGNALS)
 
