@@ -2,6 +2,7 @@ import os
 import pyotp
 import time
 import threading
+from datetime import datetime, timedelta, timezone # 1. हे नवीन ऍड केले
 from flask import Flask, render_template_string
 from SmartApi import SmartConnect
 
@@ -14,32 +15,51 @@ PASSWORD = os.environ.get("PASSWORD")
 TOTP_KEY = os.environ.get("TOTP_KEY")
 
 live_data = {} 
+market_status = "CHECKING..." # 2. स्टेटस ट्रॅक करण्यासाठी
 
-# --- 2. DATA SETUP (Everything you need) ---
+# --- 2. DATA SETUP ---
 TOKEN_MAP = {
     "RELIANCE": "2885", "TATASTEEL": "3499", "HDFCBANK": "1333", "INFY": "1594",
     "SBIN": "3045", "ICICIBANK": "4963", "AXISBANK": "5900", "WIPRO": "3787",
     "ADANIENT": "25", "MARUTI": "10999", "BAJFINANCE": "317", "ASIANPAINT": "236"
 }
 
-# तुझी पूर्ण यादी (Watchlist साठी)
 STOCKS = []
 for name, token in TOKEN_MAP.items():
     STOCKS.append({"name": name, "token": token, "price": "0.00", "sig": "WAIT"})
 
-# तुझे सिग्नल्स (Signals Panel साठी)
 SIGNALS = [
     {"symbol": "BANKNIFTY", "type": "BUY", "price": "41500.00", "time": "09:15 AM"},
     {"symbol": "RELIANCE", "type": "SELL", "price": "2450.00", "time": "10:30 AM"},
     {"symbol": "SYSTEM", "type": "INFO", "price": "0.00", "time": "LIVE MODE"}
 ]
 
-# --- 3. ENGINE (Black Screen Fix Engine) ---
+# --- 3. ENGINE (Market Time Logic Added) ---
 def start_engine():
-    global live_data
+    global live_data, market_status
     smart_api = None
     while True:
         try:
+            # --- TIME CHECK LOGIC (Day 2 Task) ---
+            utc_now = datetime.now(timezone.utc)
+            ist_now = utc_now + timedelta(hours=5, minutes=30)
+            current_time = ist_now.time()
+            weekday = ist_now.weekday() # 0=Mon, 4=Fri, 5=Sat, 6=Sun
+
+            # Market Time: 09:15 to 15:30 (Only Mon-Fri)
+            start_time = datetime.strptime("09:15", "%H:%M").time()
+            end_time = datetime.strptime("15:30", "%H:%M").time()
+
+            if weekday < 5 and start_time <= current_time <= end_time:
+                market_status = "LIVE MARKET"
+                # Market चालू आहे, पुढे जा...
+            else:
+                market_status = "MARKET CLOSED"
+                print(f"Market Closed ({ist_now.strftime('%H:%M')}). Sleeping...")
+                time.sleep(60) # 1 मिनिट झोपून रहा
+                continue # लूप इथेच थांबवा, Login करू नका
+            # -------------------------------------
+
             if smart_api is None:
                 totp = pyotp.TOTP(TOTP_KEY).now()
                 smart_api = SmartConnect(api_key=API_KEY)
@@ -65,7 +85,7 @@ t = threading.Thread(target=start_engine)
 t.daemon = True
 t.start()
 
-# --- 4. HTML TEMPLATE (THIS IS YOUR FULL DESIGN) ---
+# --- 4. HTML TEMPLATE ---
 HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="mr">
 <head>
@@ -141,7 +161,7 @@ res.style.background=bgColor; res.style.color=txtColor; res.style.boxShadow=shad
 <body>
 <div class="header">
 <div class="header-left"><button class="header-btn">LOGS</button></div>
-<div class="header-center"><h1>🔱 {{ title }}</h1><div class="status-bar"><div class="status-item" id="date-display">--/--</div><div class="status-item" id="time-display">--:--</div><div class="status-item">LIVE</div></div></div>
+<div class="header-center"><h1>🔱 {{ title }}</h1><div class="status-bar"><div class="status-item" id="date-display">--/--</div><div class="status-item" id="time-display">--:--</div><div class="status-item">{{ status }}</div></div></div>
 <div class="header-right"><button class="header-btn">HISTORY</button></div>
 </div>
 
@@ -197,7 +217,8 @@ def index():
         token = stock["token"]
         stock["price"] = live_data.get(token, "0.00")
             
-    return render_template_string(HTML_TEMPLATE, title="कान्हादेशी ट्रेडर", stocks=STOCKS, signals=SIGNALS)
+    # Status pass kela aahe HTML la
+    return render_template_string(HTML_TEMPLATE, title="कान्हादेशी ट्रेडर", stocks=STOCKS, signals=SIGNALS, status=market_status)
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
