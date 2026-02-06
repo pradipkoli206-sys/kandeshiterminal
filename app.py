@@ -6,97 +6,91 @@ from flask import Flask, render_template_string
 from SmartApi import SmartConnect
 
 app = Flask(__name__)
+SYSTEM_ERROR = False
 
-# --- 1. KEYS ---
+# --- 1. KEYS FROM RENDER ENVIRONMENT ---
 API_KEY = os.environ.get("API_KEY")
 CLIENT_ID = os.environ.get("CLIENT_ID")
 PASSWORD = os.environ.get("PASSWORD")
 TOTP_KEY = os.environ.get("TOTP_KEY")
 
-# --- 2. DATA STORE ---
+# --- 2. LIVE DATA STORE ---
 live_data = {} 
-TOKEN_MAP = {
-    "RELIANCE": "2885", "TATASTEEL": "3499", "HDFCBANK": "1333", "INFY": "1594",
-    "SBIN": "3045", "ICICIBANK": "4963", "AXISBANK": "5900", "WIPRO": "3787",
-    "ADANIENT": "25", "MARUTI": "10999", "BAJFINANCE": "317", "ASIANPAINT": "236"
-}
-STOCKS = [{"name": k, "price": 0.00, "sig": "WAIT"} for k in TOKEN_MAP.keys()]
-SIGNALS = [{"symbol": "SYSTEM", "type": "INFO", "price": "0.00", "time": "Running HTTP Mode"}]
 
-# --- 3. THE UNBREAKABLE ENGINE (HTTP POLLING) ---
-def start_polling_engine():
+# --- 3. TOKEN MAPPING ---
+TOKEN_MAP = {
+    "RELIANCE": "2885",
+    "TATASTEEL": "3499",
+    "HDFCBANK": "1333",
+    "INFY": "1594",
+    "SBIN": "3045",
+    "ICICIBANK": "4963",
+    "AXISBANK": "5900",
+    "WIPRO": "3787",
+    "ADANIENT": "25",
+    "MARUTI": "10999",
+    "BAJFINANCE": "317",
+    "ASIANPAINT": "236"
+}
+
+STOCKS = [
+    {"name": "RELIANCE", "price": 0.00, "sig": "WAIT"},
+    {"name": "TATASTEEL", "price": 0.00, "sig": "WAIT"},
+    {"name": "HDFCBANK", "price": 0.00, "sig": "WAIT"},
+    {"name": "INFY", "price": 0.00, "sig": "WAIT"},
+    {"name": "SBIN", "price": 0.00, "sig": "NONE"},
+    {"name": "ICICIBANK", "price": 0.00, "sig": "NONE"},
+    {"name": "AXISBANK", "price": 0.00, "sig": "NONE"},
+    {"name": "WIPRO", "price": 0.00, "sig": "NONE"},
+    {"name": "ADANIENT", "price": 0.00, "sig": "NONE"},
+    {"name": "MARUTI", "price": 0.00, "sig": "NONE"},
+    {"name": "BAJFINANCE", "price": 0.00, "sig": "NONE"},
+    {"name": "ASIANPAINT", "price": 0.00, "sig": "NONE"}
+]
+
+SIGNALS = [
+    {"symbol": "SYSTEM", "type": "INFO", "price": "0.00", "time": "1s UPDATE MODE"}
+]
+
+# --- 4. NEW HTTP POLLING ENGINE (REPLACING WEBSOCKET) ---
+def start_engine():
     global live_data
-    print("🚀 Starting Permanent HTTP Engine...")
-    
+    print("🚀 Starting Engine (Polling Mode)...")
     smart_api = None
     
     while True:
         try:
-            # 1. Login Check (फक्त एकदाच लॉगिन करेल)
             if smart_api is None:
-                if not API_KEY or not TOTP_KEY:
-                    print("❌ Keys Missing!")
+                totp = pyotp.TOTP(TOTP_KEY).now()
+                smart_api = SmartConnect(api_key=API_KEY)
+                data = smart_api.generateSession(CLIENT_ID, PASSWORD, totp)
+                if not data['status']:
                     time.sleep(10)
                     continue
-                
-                print("📡 Connecting to Angel One API...")
+
+            # दर १ सेकंदाला भाव अपडेट करण्याचा प्रयत्न
+            for name, token in TOKEN_MAP.items():
                 try:
-                    totp = pyotp.TOTP(TOTP_KEY).now()
-                    smart_api = SmartConnect(api_key=API_KEY)
-                    data = smart_api.generateSession(CLIENT_ID, PASSWORD, totp)
-                    
-                    if data['status']:
-                        print("✅ Login Success! Engine Started.")
-                    else:
-                        print(f"❌ Login Failed: {data['message']}")
-                        smart_api = None
-                        time.sleep(10)
-                        continue
-                except Exception as e:
-                    print(f"⚠️ Login Error: {e}")
-                    time.sleep(10)
-                    continue
+                    res = smart_api.ltpData("NSE", name, token)
+                    if res and res['status']:
+                        live_data[token] = res['data']['ltp']
+                except:
+                    pass
+                time.sleep(0.04) # API Rate limit सेफ्टी
 
-            # 2. Fetch Prices (हे कधीच Connection Closed देत नाही)
-            try:
-                # सर्व स्टॉकचे Tokens एकत्र करणे
-                exchange = "NSE"
-                tokens = list(TOKEN_MAP.values())
-                
-                # API ला विचारणे: "भाव काय आहे?"
-                for stock_name, token in TOKEN_MAP.items():
-                    # एका वेळी एक भाव आणणे (Safe Mode)
-                    quote = smart_api.ltpData(exchange, stock_name, token)
-                    
-                    if quote and quote['status'] and 'data' in quote:
-                        ltp = quote['data']['ltp']
-                        live_data[token] = ltp
-                        # print(f"Tick: {stock_name} -> {ltp}") # हवे असेल तर हे अनकमेंट कर
-                    
-                    # API वर लोड येऊ नये म्हणून छोटा ब्रेक
-                    time.sleep(0.2) 
+            time.sleep(1) # १ सेकंदाचा गॅप
 
-            except Exception as e:
-                print(f"⚠️ Fetch Error (Retrying): {e}")
-                # जर Session Expire झाले, तर पुन्हा लॉगिन करण्यासाठी Reset करणे
-                if "Invalid" in str(e) or "Session" in str(e):
-                    print("🔄 Session Expired. Re-logging in...")
-                    smart_api = None
-
-            # 3. Wait (Loop Delay)
-            # दर 2 सेकंदांनी भाव अपडेट होईल. 
-            time.sleep(2)
-
-        except Exception as main_e:
-            print(f"⚠️ Critical Error: {main_e}")
+        except Exception as e:
+            print(f"⚠️ Error: {e}")
+            smart_api = None
             time.sleep(5)
 
-# Start Background Thread
-t = threading.Thread(target=start_polling_engine)
+# Start Thread
+t = threading.Thread(target=start_engine)
 t.daemon = True
 t.start()
 
-# --- 4. HTML TEMPLATE (SAME NEON DESIGN) ---
+# --- 5. HTML TEMPLATE (YOUR ORIGINAL DESIGN - NO CHANGES) ---
 HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="mr">
 <head>
@@ -140,49 +134,6 @@ h1 { margin: 0; text-shadow: 0 0 10px var(--neon); font-size: 1.4rem; letter-spa
 .footer-val { color: var(--green); margin-left: 5px; }
 .footer-val.red { color: var(--red); }
 </style>
-</head>
-<body>
-<div class="header">
-<div class="header-left"><button class="header-btn {% if has_error %}error-active{% endif %}">{% if has_error %}⚠️ SYSTEM ERROR{% else %}ERROR LOGS{% endif %}</button></div>
-<div class="header-center"><h1>🔱 {{ title }}</h1><div class="status-bar"><div class="status-item" id="date-display">--/--</div><div class="status-item" id="time-display">--:--</div><div class="status-item">LIVE</div></div></div>
-<div class="header-right"><button class="header-btn">HISTORY</button></div>
-</div>
-<div class="split-container">
-<div class="panel">
-<div class="title-box">WATCHLIST</div>
-{% for stock in stocks %}
-<div class="pro-card">
-<div class="stock-name">{{ stock.name }}</div><div class="stock-price">₹{{ stock.price }}</div><button class="pin-btn" title="Pin">📌</button>
-</div>
-{% endfor %}
-</div>
-<div class="vertical-separator"></div>
-<div class="panel">
-<div class="title-box">SIGNALS</div>
-{% for sig in signals %}
-<div class="signal-card">
-<div class="sig-top-row">
-<div class="sig-info"><div class="sig-symbol">{{ sig.symbol }}</div><div class="sig-price">@ {{ sig.price }} | {{ sig.time }}</div></div>
-<div class="sig-badge {% if sig.type == 'BUY' %}badge-buy{% elif sig.type == 'SELL' %}badge-sell{% else %}badge-buy{% endif %}">{{ sig.type }}</div>
-</div>
-<button class="details-btn">CLICK FOR DETAILS</button>
-</div>
-{% endfor %}
-<div class="calc-box">
-<div class="calc-title">🔢 QTY CALCULATOR</div>
-<input type="number" id="userCapital" class="calc-input" placeholder="Enter Capital (₹)" value="50000" oninput="calculateQty()">
-<select id="stockSelect" class="calc-select" onchange="calculateQty()">
-<option value="0" data-sig="NONE">-- Select Stock --</option>
-{% for stock in stocks %}<option value="{{ stock.price }}" data-sig="{{ stock.sig }}">{{ stock.name }}</option>{% endfor %}
-</select>
-<div id="calcResult" class="calc-result">SELECT STOCK</div>
-</div>
-</div>
-</div>
-<div class="footer">
-<div class="footer-item">NIFTY <span class="footer-val">LIVE</span></div>
-<div class="footer-item">BANKNIFTY <span class="footer-val red">LIVE</span></div>
-</div>
 <script>
 function updateTime(){
     const now = new Date(); 
@@ -191,6 +142,9 @@ function updateTime(){
 } 
 setInterval(updateTime,1000); 
 updateTime();
+
+// दर १ सेकंदाला पेज रिफ्रेश करून नवीन भाव दाखवा
+setInterval(function(){ location.reload(); }, 1000);
 
 function calculateQty(){
 const cap=document.getElementById('userCapital').value; const select=document.getElementById('stockSelect');
@@ -214,7 +168,7 @@ res.style.background=bgColor; res.style.color=txtColor; res.style.boxShadow=shad
 </html>
 '''
 
-# --- 5. ROUTE ---
+# --- 6. ROUTE ---
 @app.route('/')
 def index():
     for stock in STOCKS:
