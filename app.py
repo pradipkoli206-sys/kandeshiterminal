@@ -8,7 +8,7 @@ from SmartApi import SmartConnect
 
 app = Flask(__name__)
 
-# --- 1. KEYS ---
+# --- 1. KEYS (Ithene keys takaychi garaj nahi, environment variables madhun gheto) ---
 API_KEY = os.environ.get("API_KEY")
 CLIENT_ID = os.environ.get("CLIENT_ID")
 PASSWORD = os.environ.get("PASSWORD")
@@ -16,18 +16,22 @@ TOTP_KEY = os.environ.get("TOTP_KEY")
 
 live_data = {} 
 market_status = "CHECKING..."
+ans1_nifty = "WAIT..."
+ans2_sector = "LOADING..."
+winning_sector_code = "ALL"
+data_fetched_once = False
 
-# --- 2. DATA SETUP (Only Tokens Updated, Logic is Old) ---
+# --- 2. DATA SETUP (CORRECT TOKENS) ---
 TOKEN_MAP = {
-    # INDICES
+    # INDICES (Names must match Angel One)
     "NIFTY": "99926000",       
     "BANKNIFTY": "99926009",   
     "NIFTY_IT": "99926004",    
     "NIFTY_AUTO": "99926002",  
 
-    # STOCKS (Updated Tokens to match Angel One)
+    # STOCKS
     "SOUTHBANK": "3351",       
-    "CENTRALBK": "17835",       
+    "CENTRALBK": "1563",       
     "UCOBANK": "1164",         
     "IDFCFIRSTB": "11184",     
     "RTNINDIA": "13425",       
@@ -47,9 +51,9 @@ for name, token in TOKEN_MAP.items():
         cat = STOCK_CATEGORY.get(name, "OTHER")
         STOCKS.append({"name": name, "token": token, "price": "0.00", "cat": cat})
 
-# --- 3. ENGINE (EXACT OLD LOGIC) ---
+# --- 3. ENGINE (FIXED LOGIC) ---
 def start_engine():
-    global live_data, market_status
+    global live_data, market_status, ans1_nifty, ans2_sector, winning_sector_code, data_fetched_once
     smart_api = None
     
     while True:
@@ -62,13 +66,16 @@ def start_engine():
             start_time = datetime.strptime("09:00", "%H:%M").time()
             end_time = datetime.strptime("15:30", "%H:%M").time()
 
-            if weekday < 5 and start_time <= current_time <= end_time:
-                market_status = "LIVE MARKET"
+            is_market_open = (weekday < 5 and start_time <= current_time <= end_time)
+            
+            if is_market_open:
+                market_status = "LIVE"
             else:
-                market_status = "MARKET CLOSED"
-                if len(live_data) > 0: # Data ekda aala asel tar loop chalu theva
-                    time.sleep(10)
-                    continue
+                market_status = "CLOSED"
+
+            if not is_market_open and data_fetched_once:
+                time.sleep(10)
+                continue
 
             if smart_api is None:
                 totp = pyotp.TOTP(TOTP_KEY).now()
@@ -78,26 +85,71 @@ def start_engine():
                     time.sleep(5)
                     continue
 
+            bank_change = -100.0; it_change = -100.0; auto_change = -100.0
+
             for name, token in TOKEN_MAP.items():
                 try:
-                    # --- OLD STYLE SYMBOL MAPPING ---
-                    # Only simple fix for Indices, rest is name + "-EQ" (Old Logic)
-                    if name == "NIFTY": symbol = "Nifty 50"
-                    elif name == "BANKNIFTY": symbol = "Nifty Bank"
-                    elif name == "NIFTY_IT": symbol = "Nifty IT"
-                    elif name == "NIFTY_AUTO": symbol = "Nifty Auto"
-                    else: symbol = name + "-EQ"
+                    # --- FINAL FIX: Symbol Logic (Strictly Applied) ---
+                    symbol = name
+                    if name == "NIFTY":
+                        symbol = "Nifty 50"
+                    elif name == "BANKNIFTY":
+                        symbol = "Nifty Bank"
+                    elif name == "NIFTY_IT":
+                        symbol = "Nifty IT"
+                    elif name == "NIFTY_AUTO":
+                        symbol = "Nifty Auto"
+                    else:
+                        symbol = name + "-EQ"
+                    # --------------------------------------------------
 
                     res = smart_api.ltpData("NSE", symbol, token)
                     
                     if res and res['status']:
-                        # OLD LOGIC: Save by TOKEN (Juna code yach padhatine save karat hota)
-                        live_data[token] = res['data']['ltp']
-                except:
+                        ltp = float(res['data']['ltp'])
+                        close = float(res['data']['close'])
+                        live_data[token] = ltp
+
+                        change = ltp - close
+                        pct_change = (change / close) * 100
+                        
+                        if name == "NIFTY": 
+                            ans1_nifty = "POSITIVE ▲" if change > 0 else "NEGATIVE ▼"
+                        
+                        if name == "BANKNIFTY": bank_change = pct_change
+                        elif name == "NIFTY_IT": it_change = pct_change
+                        elif name == "NIFTY_AUTO": auto_change = pct_change
+                except Exception as e:
+                    # Log error internally but keep engine running
+                    print(f"Error for {name}: {e}")
                     pass
                 time.sleep(0.05)
+            
+            # Sector Logic
+            if bank_change > -90 and it_change > -90 and auto_change > -90:
+                if bank_change > it_change and bank_change > auto_change:
+                    ans2_sector = "BANKING"
+                    winning_sector_code = "BANK"
+                elif it_change > bank_change and it_change > auto_change:
+                    ans2_sector = "IT / TECH"
+                    winning_sector_code = "IT"
+                elif auto_change > bank_change and auto_change > it_change:
+                    ans2_sector = "AUTO"
+                    winning_sector_code = "AUTO"
+                else:
+                    ans2_sector = "MIXED"
+                    winning_sector_code = "ALL"
+            else:
+                 # Default if fetch fails initially
+                 if ans2_sector == "LOADING...":
+                     ans2_sector = "WAIT..."
+
+            if not is_market_open:
+                data_fetched_once = True
+            
             time.sleep(1)
-        except:
+        except Exception as e:
+            print(f"Engine Error: {e}")
             smart_api = None
             time.sleep(5)
 
@@ -105,7 +157,7 @@ t = threading.Thread(target=start_engine)
 t.daemon = True
 t.start()
 
-# --- 4. HTML TEMPLATE (New UI, Old Data Binding) ---
+# --- 4. HTML TEMPLATE (SHARP UI + DATE) ---
 HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -113,26 +165,55 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
 <title>AI TRADER</title>
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
-:root { --bg-color: #0b1120; --card-bg: #1e293b; --border-color: #334155; --text-white: #ffffff; --text-grey: #94a3b8; --green: #22c55e; --red: #ef4444; --blue: #3b82f6; }
+/* --- SHARP UI (No Blur) --- */
+:root {
+    --bg-color: #0b1120;
+    --card-bg: #1e293b;
+    --border-color: #334155;
+    --text-white: #ffffff;
+    --text-grey: #94a3b8;
+    --green: #22c55e;
+    --red: #ef4444;
+    --blue: #3b82f6;
+}
 * { box-sizing: border-box; }
-body { background: var(--bg-color); color: var(--text-white); font-family: 'Roboto', sans-serif; margin: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
-.header { padding: 12px 15px; background: #111827; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; }
+body { 
+    background: var(--bg-color); 
+    color: var(--text-white); 
+    font-family: 'Roboto', sans-serif; 
+    margin: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+}
+
+/* HEADER */
+.header {
+    padding: 12px 15px; background: #111827; border-bottom: 1px solid var(--border-color);
+    display: flex; justify-content: space-between; align-items: center;
+}
 .brand { font-weight: 700; font-size: 1rem; color: var(--blue); letter-spacing: 1px; }
 .date-time { font-size: 0.8rem; color: var(--text-grey); font-weight: 500; text-align: right; }
 .status-ind { font-size: 0.7rem; color: #fff; margin-top:2px; display:flex; align-items:center; justify-content:flex-end; gap:5px;}
 .dot { width: 8px; height: 8px; background: var(--green); border-radius: 50%; }
+
+/* TOP SECTION */
 .top-container { display: flex; height: 40%; border-bottom: 1px solid var(--border-color); }
 .left-panel { flex: 6.5; padding: 20px; display: flex; flex-direction: column; justify-content: center; border-right: 1px solid var(--border-color); background: var(--bg-color); }
 .q-box { margin-bottom: 25px; }
 .q-label { color: var(--text-grey); font-size: 0.85rem; font-weight: 500; margin-bottom: 5px; }
 .a-value { font-size: 1.5rem; font-weight: 700; color: var(--text-white); letter-spacing: 0.5px; }
+.green-txt { color: var(--green); }
+.red-txt { color: var(--red); }
+
 .right-panel { flex: 3.5; background: #111827; display: flex; flex-direction: column; }
 .panel-header { padding: 10px; font-size: 0.75rem; font-weight: 700; text-align: center; border-bottom: 1px solid var(--border-color); color: var(--blue); background: #1f2937; }
 .mini-list-content { overflow-y: auto; flex: 1; }
 .mini-item { font-size: 0.85rem; padding: 10px; border-bottom: 1px solid #1f2937; color: var(--text-white); font-weight: 500; }
+
+/* FILTER BAR */
 .filter-bar { padding: 10px 15px; display: flex; gap: 10px; background: #0f172a; border-bottom: 1px solid var(--border-color); }
 .filter-btn { flex: 1; background: #1e293b; border: 1px solid var(--border-color); color: var(--text-grey); padding: 8px 0; border-radius: 6px; font-size: 0.8rem; font-weight: 500; cursor: pointer; text-align: center; }
 .filter-btn.active { background: var(--blue); color: white; border-color: var(--blue); }
+
+/* MAIN LIST */
 .main-list { flex: 1; overflow-y: auto; padding: 15px; background: var(--bg-color); }
 .stock-card { background: var(--card-bg); border: 1px solid var(--border-color); padding: 15px; border-radius: 8px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
 .st-name { font-size: 1rem; font-weight: 700; color: var(--text-white); }
@@ -141,20 +222,41 @@ body { background: var(--bg-color); color: var(--text-white); font-family: 'Robo
 .hidden { display: none !important; }
 </style>
 <script>
+let currentWinner = "ALL";
+let activeFilter = "ALL";
+
 function updateTime(){
     const now = new Date();
-    document.getElementById('dt-disp').innerText = now.toLocaleDateString('en-GB') + " | " + now.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit'});
+    const dateStr = now.toLocaleDateString('en-GB', {day: 'numeric', month: 'short', year: '2-digit'});
+    const timeStr = now.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit'});
+    document.getElementById('dt-disp').innerText = dateStr + " | " + timeStr;
 } 
 setInterval(updateTime,1000); 
 
 function filterStocks(type) {
+    activeFilter = type;
     document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
     document.getElementById('btn-'+type).classList.add('active');
+    applyFilter();
+}
+
+function applyFilter() {
     const cards = document.querySelectorAll('.stock-card');
     cards.forEach(card => {
         const cat = card.getAttribute('data-cat');
-        if (type === 'ALL' || type === 'TODAY' || type === 'PREV') card.classList.remove('hidden'); 
-        // Logic simple thevle ahe currently
+        let show = false;
+        if (activeFilter === 'ALL') show = true;
+        else if (activeFilter === 'TODAY') {
+            if (currentWinner === 'ALL' || cat === currentWinner) show = true;
+        }
+        if(show) card.classList.remove('hidden'); else card.classList.add('hidden');
+    });
+    
+    // Update Mini List
+    const miniItems = document.querySelectorAll('.mini-item');
+    miniItems.forEach(item => {
+        const cat = item.getAttribute('data-cat');
+        if (currentWinner === 'ALL' || cat === currentWinner) item.style.display = 'block'; else item.style.display = 'none';
     });
 }
 
@@ -163,16 +265,28 @@ function fetchData() {
     .then(response => response.json())
     .then(data => {
         document.getElementById('status-disp').innerText = data.status;
+        
+        const ans1El = document.getElementById('ans1-disp');
+        ans1El.innerText = data.ans1;
+        if(data.ans1.includes("POSITIVE")) { ans1El.className = "a-value green-txt"; }
+        else if(data.ans1.includes("NEGATIVE")) { ans1El.className = "a-value red-txt"; }
+        else { ans1El.className = "a-value"; }
+
+        document.getElementById('ans2-disp').innerText = data.ans2;
+        currentWinner = data.winner;
+        
         data.stocks.forEach(s => {
-            const el = document.getElementById('price-' + s.token); // OLD LOGIC: ID token varun shodha
+            const el = document.getElementById('price-' + s.name);
             if(el) el.innerText = "₹" + s.price;
         });
+        applyFilter();
     });
 }
 setInterval(fetchData, 1000); 
 </script>
 </head>
 <body>
+
 <div class="header">
     <div class="brand">AI TRADER</div>
     <div>
@@ -180,58 +294,70 @@ setInterval(fetchData, 1000);
         <div class="status-ind"><span class="dot"></span><span id="status-disp">{{ status }}</span></div>
     </div>
 </div>
+
 <div class="top-container">
     <div class="left-panel">
-        <div class="q-box"><div class="q-label">01. MARKET TREND</div><div class="a-value">WAIT...</div></div>
-        <div class="q-box"><div class="q-label">02. TOP SECTOR</div><div class="a-value" style="color:var(--blue);">LOADING...</div></div>
+        <div class="q-box">
+            <div class="q-label">01. MARKET TREND</div>
+            <div class="a-value" id="ans1-disp">{{ ans1 }}</div>
+        </div>
+        <div class="q-box">
+            <div class="q-label">02. TOP SECTOR</div>
+            <div class="a-value" style="color:var(--blue);" id="ans2-disp">{{ ans2 }}</div>
+        </div>
     </div>
     <div class="right-panel">
         <div class="panel-header">🚀 TODAY'S PICKS</div>
         <div class="mini-list-content">
             {% for stock in stocks %}
-            <div class="mini-item">{{ stock.name }}</div>
+            <div class="mini-item" data-cat="{{ stock.cat }}">{{ stock.name }}</div>
             {% endfor %}
         </div>
     </div>
 </div>
+
 <div class="filter-bar">
     <div id="btn-ALL" class="filter-btn active" onclick="filterStocks('ALL')">ALL STOCKS</div>
     <div id="btn-TODAY" class="filter-btn" onclick="filterStocks('TODAY')">TODAY'S PICK</div>
     <div id="btn-PREV" class="filter-btn" onclick="filterStocks('PREV')">PREVIOUS</div>
 </div>
+
 <div class="main-list">
     {% for stock in stocks %}
     <div class="stock-card" id="card-{{ stock.name }}" data-cat="{{ stock.cat }}">
-        <div class="st-info"><span class="st-name">{{ stock.name }}</span><span class="st-cat">{{ stock.cat }}</span></div>
-        <div class="st-price" id="price-{{ stock.token }}">₹{{ stock.price }}</div>
+        <div class="st-info">
+            <span class="st-name">{{ stock.name }}</span>
+            <span class="st-cat">{{ stock.cat }}</span>
+        </div>
+        <div class="st-price" id="price-{{ stock.name }}">₹{{ stock.price }}</div>
     </div>
     {% endfor %}
 </div>
+
 </body>
 </html>
 '''
 
-# --- 5. ROUTES (EXACT OLD LOGIC) ---
+# --- 5. ROUTES ---
 @app.route('/')
 def index():
-    # OLD LOGIC: Update price from live_data using TOKEN
     for stock in STOCKS:
         token = stock["token"]
         stock["price"] = live_data.get(token, "0.00")
-    return render_template_string(HTML_TEMPLATE, status=market_status, stocks=STOCKS)
+    return render_template_string(HTML_TEMPLATE, status=market_status, ans1=ans1_nifty, ans2=ans2_sector, stocks=STOCKS, winner=winning_sector_code)
 
 @app.route('/data')
 def data():
-    stock_list = []
-    # OLD LOGIC: Create list using TOKEN match
     for stock in STOCKS:
         token = stock["token"]
-        price = live_data.get(token, "0.00")
-        stock_list.append({"token": token, "price": price})
+        stock["price"] = live_data.get(token, "0.00")
     
     return jsonify({
         "status": market_status,
-        "stocks": stock_list
+        "ans1": ans1_nifty,
+        "ans2": ans2_sector,
+        "winner": winning_sector_code,
+        "stocks": STOCKS
     })
 
 if __name__ == '__main__':
