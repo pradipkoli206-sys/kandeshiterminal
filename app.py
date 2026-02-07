@@ -8,7 +8,7 @@ from SmartApi import SmartConnect
 
 app = Flask(__name__)
 
-# --- 1. KEYS (Ithene keys takaychi garaj nahi, environment variables madhun gheto) ---
+# --- 1. KEYS ---
 API_KEY = os.environ.get("API_KEY")
 CLIENT_ID = os.environ.get("CLIENT_ID")
 PASSWORD = os.environ.get("PASSWORD")
@@ -21,9 +21,9 @@ ans2_sector = "LOADING..."
 winning_sector_code = "ALL"
 data_fetched_once = False
 
-# --- 2. DATA SETUP (CORRECT TOKENS) ---
+# --- 2. DATA SETUP ---
 TOKEN_MAP = {
-    # INDICES (Names must match Angel One)
+    # INDICES
     "NIFTY": "99926000",       
     "BANKNIFTY": "99926009",   
     "NIFTY_IT": "99926004",    
@@ -51,7 +51,7 @@ for name, token in TOKEN_MAP.items():
         cat = STOCK_CATEGORY.get(name, "OTHER")
         STOCKS.append({"name": name, "token": token, "price": "0.00", "cat": cat})
 
-# --- 3. ENGINE (FIXED LOGIC) ---
+# --- 3. ENGINE (FIXED LOGIC FOR BE/EQ SERIES) ---
 def start_engine():
     global live_data, market_status, ans1_nifty, ans2_sector, winning_sector_code, data_fetched_once
     smart_api = None
@@ -78,10 +78,16 @@ def start_engine():
                 continue
 
             if smart_api is None:
-                totp = pyotp.TOTP(TOTP_KEY).now()
-                smart_api = SmartConnect(api_key=API_KEY)
-                data = smart_api.generateSession(CLIENT_ID, PASSWORD, totp)
-                if not data['status']:
+                try:
+                    totp = pyotp.TOTP(TOTP_KEY).now()
+                    smart_api = SmartConnect(api_key=API_KEY)
+                    data = smart_api.generateSession(CLIENT_ID, PASSWORD, totp)
+                    if not data['status']:
+                        print("Login Failed:", data)
+                        time.sleep(5)
+                        continue
+                except Exception as e:
+                    print("Login Error:", e)
                     time.sleep(5)
                     continue
 
@@ -89,17 +95,21 @@ def start_engine():
 
             for name, token in TOKEN_MAP.items():
                 try:
-                    # --- FINAL FIX: Symbol Logic (Strictly Applied) ---
+                    # --- FINAL LOGIC FIX (Handles EQ and BE series) ---
                     symbol = name
-                    if name == "NIFTY":
+                    if name == "NIFTY": 
                         symbol = "Nifty 50"
-                    elif name == "BANKNIFTY":
+                    elif name == "BANKNIFTY": 
                         symbol = "Nifty Bank"
-                    elif name == "NIFTY_IT":
+                    elif name == "NIFTY_IT": 
                         symbol = "Nifty IT"
-                    elif name == "NIFTY_AUTO":
+                    elif name == "NIFTY_AUTO": 
                         symbol = "Nifty Auto"
+                    elif name in ["RTNINDIA", "TTML"]: 
+                        # These stocks often trade in BE series on Angel One
+                        symbol = name + "-BE"
                     else:
+                        # Default for others
                         symbol = name + "-EQ"
                     # --------------------------------------------------
 
@@ -119,13 +129,16 @@ def start_engine():
                         if name == "BANKNIFTY": bank_change = pct_change
                         elif name == "NIFTY_IT": it_change = pct_change
                         elif name == "NIFTY_AUTO": auto_change = pct_change
+                    else:
+                        # Print error for debugging only if needed
+                        # print(f"Failed for {name}: {res}")
+                        pass
+
                 except Exception as e:
-                    # Log error internally but keep engine running
-                    print(f"Error for {name}: {e}")
                     pass
                 time.sleep(0.05)
             
-            # Sector Logic
+            # Logic to determine winning sector
             if bank_change > -90 and it_change > -90 and auto_change > -90:
                 if bank_change > it_change and bank_change > auto_change:
                     ans2_sector = "BANKING"
@@ -140,7 +153,6 @@ def start_engine():
                     ans2_sector = "MIXED"
                     winning_sector_code = "ALL"
             else:
-                 # Default if fetch fails initially
                  if ans2_sector == "LOADING...":
                      ans2_sector = "WAIT..."
 
@@ -149,7 +161,6 @@ def start_engine():
             
             time.sleep(1)
         except Exception as e:
-            print(f"Engine Error: {e}")
             smart_api = None
             time.sleep(5)
 
@@ -157,7 +168,7 @@ t = threading.Thread(target=start_engine)
 t.daemon = True
 t.start()
 
-# --- 4. HTML TEMPLATE (SHARP UI + DATE) ---
+# --- 4. HTML TEMPLATE ---
 HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -165,7 +176,7 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
 <title>AI TRADER</title>
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
-/* --- SHARP UI (No Blur) --- */
+/* --- SHARP UI --- */
 :root {
     --bg-color: #0b1120;
     --card-bg: #1e293b;
