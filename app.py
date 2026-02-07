@@ -18,7 +18,8 @@ live_data = {}
 market_status = "CHECKING..."
 ans1_nifty = "WAIT..."
 ans2_sector = "LOADING..."
-winning_sector_code = "ALL" 
+winning_sector_code = "ALL"
+data_fetched_once = False  # NEW FLAG: मार्केट बंद असताना एकदाच डेटा आणण्यासाठी
 
 # --- 2. DATA SETUP ---
 TOKEN_MAP = {
@@ -39,10 +40,11 @@ for name, token in TOKEN_MAP.items():
         cat = STOCK_CATEGORY.get(name, "OTHER")
         STOCKS.append({"name": name, "token": token, "price": "0.00", "cat": cat})
 
-# --- 3. ENGINE ---
+# --- 3. ENGINE (SMART LOGIC: Stop Requests if Closed) ---
 def start_engine():
-    global live_data, market_status, ans1_nifty, ans2_sector, winning_sector_code
+    global live_data, market_status, ans1_nifty, ans2_sector, winning_sector_code, data_fetched_once
     smart_api = None
+    
     while True:
         try:
             utc_now = datetime.now(timezone.utc)
@@ -53,11 +55,21 @@ def start_engine():
             start_time = datetime.strptime("09:00", "%H:%M").time()
             end_time = datetime.strptime("15:30", "%H:%M").time()
 
-            if weekday < 5 and start_time <= current_time <= end_time:
+            # 1. Market Status Check
+            is_market_open = (weekday < 5 and start_time <= current_time <= end_time)
+            
+            if is_market_open:
                 market_status = "🟢 LIVE"
             else:
                 market_status = "🔴 CLOSED"
 
+            # 2. SMART STOP LOGIC (Imp)
+            # जर मार्केट बंद असेल आणि आपण एकदा डेटा आणला असेल, तर रिक्वेस्ट पाठवू नको.
+            if not is_market_open and data_fetched_once:
+                time.sleep(10) # 10 सेकंद झोपून राहा (API call नाही जाणार)
+                continue 
+
+            # 3. Connection Setup
             if smart_api is None:
                 totp = pyotp.TOTP(TOTP_KEY).now()
                 smart_api = SmartConnect(api_key=API_KEY)
@@ -66,6 +78,7 @@ def start_engine():
                     time.sleep(5)
                     continue
 
+            # 4. Data Fetching
             bank_change = -100.0; it_change = -100.0; auto_change = -100.0
 
             for name, token in TOKEN_MAP.items():
@@ -88,6 +101,7 @@ def start_engine():
                     pass
                 time.sleep(0.05)
             
+            # 5. Logic Updates
             if bank_change > it_change and bank_change > auto_change:
                 ans2_sector = "BANKING"
                 winning_sector_code = "BANK"
@@ -101,7 +115,12 @@ def start_engine():
                 ans2_sector = "MIXED"
                 winning_sector_code = "ALL"
             
-            time.sleep(1)
+            # जर मार्केट बंद असेल, तर फ्लॅग सेट करा (पुन्हा रिक्वेस्ट जाणार नाही)
+            if not is_market_open:
+                data_fetched_once = True
+            
+            time.sleep(1) # Normal delay
+            
         except:
             smart_api = None
             time.sleep(5)
@@ -110,7 +129,7 @@ t = threading.Thread(target=start_engine)
 t.daemon = True
 t.start()
 
-# --- 4. HTML TEMPLATE (PREMIUM UI DESIGN) ---
+# --- 4. HTML TEMPLATE (Professional UI) ---
 HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="en">
 <head>
