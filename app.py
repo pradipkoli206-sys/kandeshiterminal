@@ -8,7 +8,7 @@ from SmartApi import SmartConnect
 
 app = Flask(__name__)
 
-# --- 1. KEYS ---
+# --- 1. KEYS (Ithene keys takaychi garaj nahi, environment variables madhun gheto) ---
 API_KEY = os.environ.get("API_KEY")
 CLIENT_ID = os.environ.get("CLIENT_ID")
 PASSWORD = os.environ.get("PASSWORD")
@@ -21,15 +21,15 @@ ans2_sector = "LOADING..."
 winning_sector_code = "ALL"
 data_fetched_once = False
 
-# --- 2. DATA SETUP (OLD STRUCTURE - CORRECT TOKENS) ---
+# --- 2. DATA SETUP (CORRECT TOKENS) ---
 TOKEN_MAP = {
-    # INDICES
+    # INDICES (Names must match Angel One)
     "NIFTY": "99926000",       
     "BANKNIFTY": "99926009",   
     "NIFTY_IT": "99926004",    
     "NIFTY_AUTO": "99926002",  
 
-    # STOCKS (REAL NSE TOKENS - PRICE FIX)
+    # STOCKS
     "SOUTHBANK": "3351",       
     "CENTRALBK": "1563",       
     "UCOBANK": "1164",         
@@ -51,7 +51,7 @@ for name, token in TOKEN_MAP.items():
         cat = STOCK_CATEGORY.get(name, "OTHER")
         STOCKS.append({"name": name, "token": token, "price": "0.00", "cat": cat})
 
-# --- 3. ENGINE ---
+# --- 3. ENGINE (FIXED LOGIC) ---
 def start_engine():
     global live_data, market_status, ans1_nifty, ans2_sector, winning_sector_code, data_fetched_once
     smart_api = None
@@ -89,16 +89,16 @@ def start_engine():
 
             for name, token in TOKEN_MAP.items():
                 try:
-                    # FIX: Symbol Logic (Indices vs Stocks)
-                    if "NIFTY" in name:
-                        symbol = name
-                        if name == "NIFTY": symbol = "Nifty 50"
-                        if name == "BANKNIFTY": symbol = "Nifty Bank"
-                        if name == "NIFTY_IT": symbol = "Nifty IT"
-                        if name == "NIFTY_AUTO": symbol = "Nifty Auto"
-                        res = smart_api.ltpData("NSE", symbol, token)
-                    else:
-                        res = smart_api.ltpData("NSE", name + "-EQ", token)
+                    # --- FINAL FIX: Symbol Logic ---
+                    symbol = name
+                    if name == "NIFTY": symbol = "Nifty 50"
+                    elif name == "BANKNIFTY": symbol = "Nifty Bank"
+                    elif name == "NIFTY_IT": symbol = "Nifty IT"
+                    elif name == "NIFTY_AUTO": symbol = "Nifty Auto"
+                    else: symbol = name + "-EQ"
+                    # -------------------------------
+
+                    res = smart_api.ltpData("NSE", symbol, token)
                     
                     if res and res['status']:
                         ltp = float(res['data']['ltp'])
