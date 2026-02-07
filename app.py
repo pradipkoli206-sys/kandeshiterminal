@@ -21,23 +21,24 @@ ans2_sector = "LOADING..."
 winning_sector_code = "ALL"
 data_fetched_once = False
 
-# --- 2. DATA SETUP ---
+# --- 2. DATA SETUP (CORRECT TOKENS & EXCHANGES) ---
+# Southbank BSE var aahe, bakiche NSE var aahet.
 TOKEN_MAP = {
     # INDICES
-    "NIFTY": "99926000",       
-    "BANKNIFTY": "99926009",   
-    "NIFTY_IT": "99926004",    
-    "NIFTY_AUTO": "99926002",  
+    "NIFTY":      {"token": "99926000", "exch": "NSE", "symbol": "Nifty 50"},
+    "BANKNIFTY":  {"token": "99926009", "exch": "NSE", "symbol": "Nifty Bank"},
+    "NIFTY_IT":   {"token": "99926004", "exch": "NSE", "symbol": "Nifty IT"},
+    "NIFTY_AUTO": {"token": "99926002", "exch": "NSE", "symbol": "Nifty Auto"},
 
-    # STOCKS
-    "SOUTHBANK": "3351",       
-    "CENTRALBK": "1563",       
-    "UCOBANK": "1164",         
-    "IDFCFIRSTB": "11184",     
-    "RTNINDIA": "13425",       
-    "OLAELEC": "29135",        
-    "TTML": "3515",            
-    "HFCL": "1363"             
+    # STOCKS (Corrected Tokens)
+    "SOUTHBANK":  {"token": "532218", "exch": "BSE", "symbol": "SOUTHBANK"}, # BSE Token
+    "CENTRALBK":  {"token": "1563",   "exch": "NSE", "symbol": "CENTRALBK-EQ"},
+    "UCOBANK":    {"token": "1164",   "exch": "NSE", "symbol": "UCOBANK-EQ"},
+    "IDFCFIRSTB": {"token": "11184",  "exch": "NSE", "symbol": "IDFCFIRSTB-EQ"},
+    "RTNINDIA":   {"token": "13425",  "exch": "NSE", "symbol": "RTNINDIA-EQ"}, # Back to EQ
+    "OLAELEC":    {"token": "29135",  "exch": "NSE", "symbol": "OLAELEC-EQ"},
+    "TTML":       {"token": "3515",   "exch": "NSE", "symbol": "TTML-EQ"},     # Back to EQ
+    "HFCL":       {"token": "1363",   "exch": "NSE", "symbol": "HFCL-EQ"}
 }
 
 STOCK_CATEGORY = {
@@ -46,12 +47,12 @@ STOCK_CATEGORY = {
 }
 
 STOCKS = []
-for name, token in TOKEN_MAP.items():
+for name, details in TOKEN_MAP.items():
     if "NIFTY" not in name:
         cat = STOCK_CATEGORY.get(name, "OTHER")
-        STOCKS.append({"name": name, "token": token, "price": "0.00", "cat": cat})
+        STOCKS.append({"name": name, "token": details["token"], "price": "0.00", "cat": cat})
 
-# --- 3. ENGINE (FIXED LOGIC FOR BE/EQ SERIES) ---
+# --- 3. ENGINE (OPTIMIZED LOGIC) ---
 def start_engine():
     global live_data, market_status, ans1_nifty, ans2_sector, winning_sector_code, data_fetched_once
     smart_api = None
@@ -93,27 +94,14 @@ def start_engine():
 
             bank_change = -100.0; it_change = -100.0; auto_change = -100.0
 
-            for name, token in TOKEN_MAP.items():
+            for name, details in TOKEN_MAP.items():
                 try:
-                    # --- FINAL LOGIC FIX (Handles EQ and BE series) ---
-                    symbol = name
-                    if name == "NIFTY": 
-                        symbol = "Nifty 50"
-                    elif name == "BANKNIFTY": 
-                        symbol = "Nifty Bank"
-                    elif name == "NIFTY_IT": 
-                        symbol = "Nifty IT"
-                    elif name == "NIFTY_AUTO": 
-                        symbol = "Nifty Auto"
-                    elif name in ["RTNINDIA", "TTML"]: 
-                        # These stocks often trade in BE series on Angel One
-                        symbol = name + "-BE"
-                    else:
-                        # Default for others
-                        symbol = name + "-EQ"
-                    # --------------------------------------------------
+                    # Specific Exchange and Symbol from Map
+                    exch = details["exch"]
+                    symbol = details["symbol"]
+                    token = details["token"]
 
-                    res = smart_api.ltpData("NSE", symbol, token)
+                    res = smart_api.ltpData(exch, symbol, token)
                     
                     if res and res['status']:
                         ltp = float(res['data']['ltp'])
@@ -130,15 +118,17 @@ def start_engine():
                         elif name == "NIFTY_IT": it_change = pct_change
                         elif name == "NIFTY_AUTO": auto_change = pct_change
                     else:
-                        # Print error for debugging only if needed
-                        # print(f"Failed for {name}: {res}")
                         pass
+                        # print(f"Error for {name}: {res}") 
 
                 except Exception as e:
+                    print(f"Exception for {name}: {e}")
                     pass
-                time.sleep(0.05)
+                
+                # IMPORTANT: Slow down to avoid Rate Limit (AB1018 often comes from spamming)
+                time.sleep(0.3)
             
-            # Logic to determine winning sector
+            # Sector Logic
             if bank_change > -90 and it_change > -90 and auto_change > -90:
                 if bank_change > it_change and bank_change > auto_change:
                     ans2_sector = "BANKING"
@@ -161,6 +151,7 @@ def start_engine():
             
             time.sleep(1)
         except Exception as e:
+            print("Engine Crash:", e)
             smart_api = None
             time.sleep(5)
 
