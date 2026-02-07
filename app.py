@@ -89,14 +89,18 @@ def start_engine():
 
             for name, token in TOKEN_MAP.items():
                 try:
-                    # --- FINAL FIX: Symbol Logic ---
+                    # --- FINAL FIX: Symbol Logic (Fixed AB1018) ---
                     if name == "NIFTY":
                         symbol = "Nifty 50"
                     elif name == "BANKNIFTY":
                         symbol = "Nifty Bank"
+                    elif name == "NIFTY_IT":
+                        symbol = "Nifty IT"
+                    elif name == "NIFTY_AUTO":
+                        symbol = "Nifty Auto"
                     else:
                         symbol = name + "-EQ"
-                    # -------------------------------
+                    # ----------------------------------------------
 
                     res = smart_api.ltpData("NSE", symbol, token)
                     
