@@ -80,20 +80,19 @@ t = threading.Thread(target=start_engine)
 t.daemon = True
 t.start()
 
-# --- 4. HTML TEMPLATE (Clean Slate) ---
+# --- 4. HTML TEMPLATE (Name Removed) ---
 HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="mr">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>कान्हादेशी AI (Clean)</title>
+<title>Stock Monitor</title>
 <style>
 /* जुनीच स्टाईल (Neon Theme) */
 :root { --bg: #02040a; --card: #0d1117; --neon: #00f2ff; --green: #00ff66; --red: #ff3333; }
 body { background: var(--bg); color: #fff; font-family: sans-serif; margin: 0; padding-bottom: 20px; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
 
-/* Header तसाच ठेवला आहे */
-.header { padding: 10px 15px; background: rgba(10, 17, 24, 0.95); border-bottom: 2px solid var(--neon); flex-shrink: 0; display: flex; justify-content: space-between; align-items: center; }
-h1 { margin: 0; text-shadow: 0 0 10px var(--neon); font-size: 1.2rem; letter-spacing: 1px; }
+/* Header Cleaned - Name Removed */
+.header { padding: 10px 15px; background: rgba(10, 17, 24, 0.95); border-bottom: 2px solid var(--neon); flex-shrink: 0; display: flex; justify-content: center; align-items: center; }
 
 /* Status Bar */
 .status-bar { display: flex; justify-content: center; gap: 5px; font-size: 0.75rem; font-weight: bold; color: #ccc; }
@@ -119,7 +118,6 @@ setInterval(function(){ location.reload(); }, 5000);
 <body>
 
 <div class="header">
-    <h1>🔱 कान्हादेशी AI</h1>
     <div class="status-bar">
         <div class="status-item" id="date-display">--/--</div>
         <div class="status-item" id="time-display">--:--</div>
