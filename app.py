@@ -18,36 +18,31 @@ live_data = {}
 market_status = "CHECKING..."
 ans1_nifty = "वाट पहा..."
 ans2_sector = "डेटा चेक करत आहे..."
-winning_sector_code = "ALL" # Default (Sagle dakhva)
+winning_sector_code = "ALL" 
 
-# --- 2. DATA SETUP ---
+# --- 2. DATA SETUP (REAL TOKENS ADDED) ---
+# आता हे डमी नाहीत, हे Angel One चे खरे NSE Tokens आहेत.
 TOKEN_MAP = {
-    "NIFTY": "99926000",
-    "BANKNIFTY": "99926009",
-    "NIFTY_IT": "00000",
-    "NIFTY_AUTO": "00000",
+    "NIFTY": "99926000",       # Nifty 50 Index
+    "BANKNIFTY": "99926009",   # Bank Nifty Index
+    "NIFTY_IT": "99926004",    # Nifty IT Index
+    "NIFTY_AUTO": "99926002",  # Nifty Auto Index
     
-    # Tujhe Stocks (Category wise)
-    "SOUTHBANK": "00000",
-    "CENTRALBK": "00000",
-    "UCOBANK": "00000",
-    "IDFCFIRSTB": "00000",
-    "RTNINDIA": "00000",
-    "OLAELEC": "00000",
-    "TTML": "00000",
-    "HFCL": "00000"
+    # तुझे स्टॉक्स (NSE Tokens)
+    "SOUTHBANK": "3351",       # South Indian Bank
+    "CENTRALBK": "1563",       # Central Bank
+    "UCOBANK": "1164",         # UCO Bank
+    "IDFCFIRSTB": "11184",     # IDFC First Bank
+    "RTNINDIA": "13425",       # RattanIndia Enterprises
+    "OLAELEC": "29135",        # Ola Electric
+    "TTML": "3515",            # TTML
+    "HFCL": "1363"             # HFCL
 }
 
-# Stocks la Sector pramane waatun ghetle
+# Stocks Category (Drawing madhe 'Today Stocks' sathi)
 STOCK_CATEGORY = {
-    "SOUTHBANK": "BANK",
-    "CENTRALBK": "BANK",
-    "UCOBANK": "BANK",
-    "IDFCFIRSTB": "BANK",
-    "OLAELEC": "AUTO",
-    "RTNINDIA": "POWER", 
-    "TTML": "IT",        
-    "HFCL": "IT"         
+    "SOUTHBANK": "BANK", "CENTRALBK": "BANK", "UCOBANK": "BANK", "IDFCFIRSTB": "BANK",
+    "OLAELEC": "AUTO", "RTNINDIA": "POWER", "TTML": "IT", "HFCL": "IT"
 }
 
 STOCKS = []
@@ -85,55 +80,48 @@ def start_engine():
                     time.sleep(5)
                     continue
 
-            # Sector Changes Track karnya sathi
-            bank_change = -100.0
-            it_change = -100.0
-            auto_change = -100.0
-            nifty_change = 0.0
+            # Sector Logic
+            bank_change = -100.0; it_change = -100.0; auto_change = -100.0
 
             for name, token in TOKEN_MAP.items():
                 try:
                     res = smart_api.ltpData("NSE", name + "-EQ", token)
+                    # जर Index असेल (Nifty/BankNifty) तर सिम्बॉल वेगळा असतो
+                    if "NIFTY" in name:
+                         res = smart_api.ltpData("NSE", name, token)
+                    
                     if res and res['status']:
                         ltp = float(res['data']['ltp'])
                         close = float(res['data']['close'])
                         live_data[token] = ltp
 
-                        # --- PROCESS 1 CALCULATION ---
                         if start_time <= current_time:
                             change = ltp - close
                             pct_change = (change / close) * 100
 
                             if name == "NIFTY":
-                                nifty_change = change
-                                if change > 0: ans1_nifty = "🟢 हो, निफ्टी POSITIVE आहे!"
-                                else: ans1_nifty = "🔴 नाही, निफ्टी NEGATIVE आहे."
-
+                                ans1_nifty = "🟢 POSITIVE" if change > 0 else "🔴 NEGATIVE"
+                            
                             if name == "BANKNIFTY": bank_change = pct_change
                             elif name == "NIFTY_IT": it_change = pct_change
                             elif name == "NIFTY_AUTO": auto_change = pct_change
-
                 except:
                     pass
                 time.sleep(0.05)
             
-            # --- PROCESS 2: SECTOR WINNER & FILTER ---
-            # Konta sector jorat aahe?
-            if bank_change > 0.5 and bank_change > it_change and bank_change > auto_change:
-                ans2_sector = f"🏦 बँकिंग (BANKING) जोरात आहे ({bank_change:.2f}%)"
+            # Winner Logic (Sector Comparison)
+            if bank_change > it_change and bank_change > auto_change:
+                ans2_sector = "BANK SECTOR"
                 winning_sector_code = "BANK"
-            
-            elif it_change > 0.5 and it_change > bank_change and it_change > auto_change:
-                ans2_sector = f"💻 आयटी (IT/TELE) जोरात आहे ({it_change:.2f}%)"
+            elif it_change > bank_change and it_change > auto_change:
+                ans2_sector = "IT SECTOR"
                 winning_sector_code = "IT"
-
-            elif auto_change > 0.5 and auto_change > bank_change and auto_change > it_change:
-                ans2_sector = f"🚗 ऑटो (AUTO) जोरात आहे ({auto_change:.2f}%)"
+            elif auto_change > bank_change and auto_change > it_change:
+                ans2_sector = "AUTO SECTOR"
                 winning_sector_code = "AUTO"
-            
             else:
-                ans2_sector = "⚠️ मार्केट मिक्स (MIXED) आहे."
-                winning_sector_code = "ALL" # Sagle dakhva jar clear trend nasel
+                ans2_sector = "MIXED / SIDEWAYS"
+                winning_sector_code = "ALL"
             
             time.sleep(1)
         except:
@@ -144,7 +132,7 @@ t = threading.Thread(target=start_engine)
 t.daemon = True
 t.start()
 
-# --- 4. HTML TEMPLATE ---
+# --- 4. HTML TEMPLATE (PHOTO STRUCTURE) ---
 HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="mr">
 <head>
@@ -154,76 +142,118 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
 :root { --bg: #02040a; --card: #0d1117; --neon: #00f2ff; --green: #00ff66; --red: #ff3333; --yellow: #ffcc00; }
 body { background: var(--bg); color: #fff; font-family: sans-serif; margin: 0; padding-bottom: 20px; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
 
-.header { padding: 10px 15px; background: rgba(10, 17, 24, 0.95); border-bottom: 2px solid var(--neon); flex-shrink: 0; display: flex; justify-content: center; align-items: center; }
-.status-bar { display: flex; justify-content: center; gap: 5px; font-size: 0.75rem; font-weight: bold; color: #ccc; }
-.status-item { border: 1px solid var(--neon); padding: 2px 5px; border-radius: 4px; background: rgba(0, 242, 255, 0.1); color: var(--neon); }
+.header { padding: 10px; background: rgba(10, 17, 24, 0.95); border-bottom: 1px solid var(--neon); text-align: center; }
+.status-bar { font-size: 0.8rem; color: #ccc; font-weight: bold; }
 
-.main-container { flex: 1; display: flex; flex-direction: column; padding: 20px; overflow-y: auto; align-items: center; }
+/* TOP SECTION (Split 70% - 30%) */
+.top-container { display: flex; height: 35%; border-bottom: 1px solid #333; }
+.left-panel { flex: 7; padding: 10px; border-right: 1px solid #333; display: flex; flex-direction: column; justify-content: center; }
+.right-panel { flex: 3; padding: 10px; overflow-y: auto; background: rgba(0,242,255,0.05); }
 
-/* Que Box (TOP SECTION) */
-.process-box { width: 95%; max-width: 400px; background: var(--card); border: 2px solid var(--neon); border-radius: 10px; padding: 15px; text-align: center; margin-bottom: 25px; flex-shrink: 0; box-shadow: 0 0 15px rgba(0, 242, 255, 0.15); }
-.que-text { font-size: 0.95rem; color: #aaa; margin-bottom: 5px; font-weight: bold; }
-.ans-text { font-size: 1.1rem; color: #fff; font-weight: 900; margin-bottom: 15px; padding: 8px; background: rgba(0, 242, 255, 0.1); border-radius: 5px; border: 1px dashed var(--neon); }
+/* Q&A Style */
+.q-box { margin-bottom: 15px; }
+.q-text { color: #aaa; font-size: 0.9rem; margin-bottom: 5px; }
+.a-text { color: var(--neon); font-size: 1.2rem; font-weight: 900; text-shadow: 0 0 5px var(--neon); }
 
-/* Stock List (BELOW SECTION) */
-.stock-list { width: 95%; max-width: 400px; display: flex; flex-direction: column; gap: 10px; }
-.stock-card { background: #161b22; border: 1px solid #333; padding: 15px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; animation: fadeIn 0.5s; transition: 0.3s; }
-.stock-card:hover { border-color: var(--neon); box-shadow: 0 0 5px var(--neon); }
-.st-name { color: #fff; font-weight: 900; font-size: 1rem; }
-.st-price { color: var(--green); font-weight: bold; }
-.st-cat { font-size: 0.6rem; background: #333; padding: 2px 5px; border-radius: 3px; color: #888; margin-left: 5px; }
+/* Right Mini List */
+.mini-title { font-size: 0.7rem; color: var(--yellow); text-align: center; margin-bottom: 5px; text-decoration: underline; }
+.mini-item { font-size: 0.7rem; color: #fff; border-bottom: 1px solid #333; padding: 3px 0; }
 
-@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+/* FILTER OPTIONS (As per photo) */
+.filter-bar { display: flex; padding: 10px; gap: 10px; background: #000; overflow-x: auto; }
+.filter-btn { 
+    background: #111; border: 1px solid #444; color: #888; padding: 8px 15px; border-radius: 20px; 
+    font-size: 0.8rem; font-weight: bold; white-space: nowrap; cursor: pointer; flex: 1; text-align: center;
+}
+.filter-btn.active { background: var(--neon); color: #000; border-color: var(--neon); box-shadow: 0 0 10px var(--neon); }
+
+/* MAIN LIST */
+.main-list { flex: 1; overflow-y: auto; padding: 10px; }
+.stock-card { 
+    background: var(--card); border: 1px solid #333; padding: 15px; border-radius: 10px; margin-bottom: 10px;
+    display: flex; justify-content: space-between; align-items: center; 
+}
+.st-name { font-size: 1rem; font-weight: bold; color: #fff; }
+.st-price { font-size: 1rem; font-weight: bold; color: var(--green); }
+.hidden { display: none; }
 </style>
 <script>
 function updateTime(){
     const now = new Date(); 
-    document.getElementById('date-display').innerText = now.toLocaleDateString('en-GB');
-    document.getElementById('time-display').innerText = now.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', hour12: true});
+    document.getElementById('time-display').innerText = now.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit'});
 } 
 setInterval(updateTime,1000); 
-updateTime();
+
+// FILTER LOGIC (Button Click)
+function filterStocks(type) {
+    // Reset Buttons
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('btn-'+type).classList.add('active');
+
+    const winner = "{{ winner }}"; // Server kadun आलेला winner code
+    const cards = document.querySelectorAll('.stock-card');
+
+    cards.forEach(card => {
+        const cat = card.getAttribute('data-cat');
+        
+        if (type === 'ALL') {
+            card.classList.remove('hidden');
+        } else if (type === 'TODAY') {
+            if (winner === 'ALL' || cat === winner) {
+                card.classList.remove('hidden');
+            } else {
+                card.classList.add('hidden');
+            }
+        } else if (type === 'PREV') {
+            // Demo logic for 'Previous' (Currently hiding all)
+            card.classList.add('hidden'); 
+        }
+    });
+}
 setInterval(function(){ location.reload(); }, 5000);
 </script>
 </head>
 <body>
 
 <div class="header">
-    <div class="status-bar">
-        <div class="status-item" id="date-display">--/--</div>
-        <div class="status-item" id="time-display">--:--</div>
-        <div class="status-item">{{ status }}</div>
-    </div>
+    <span class="status-bar" id="time-display">--:--</span> | <span class="status-bar">{{ status }}</span>
 </div>
 
-<div class="main-container">
-    
-    <div class="process-box">
-        <div style="color:var(--yellow); font-size:0.8rem; margin-bottom:10px; border-bottom:1px dashed #333; padding-bottom:5px; font-weight:bold;">STEP 1: MARKET OVERVIEW</div>
-        
-        <div class="que-text">१) आज निफ्टी पॉझिटिव्ह आहे की निगेटिव्ह?</div>
-        <div class="ans-text">{{ ans1 }}</div>
-
-        <div class="que-text">२) आज कोणता सेक्टर जोरात आहे?</div>
-        <div class="ans-text">{{ ans2 }}</div>
+<div class="top-container">
+    <div class="left-panel">
+        <div class="q-box">
+            <div class="q-text">① आज निफ्टी पॉझिटिव्ह आहे की निगेटिव्ह?</div>
+            <div class="a-text">{{ ans1 }}</div>
+        </div>
+        <div class="q-box">
+            <div class="q-text">② आज कोणता सेक्टर जोरात आहे?</div>
+            <div class="a-text">{{ ans2 }}</div>
+        </div>
     </div>
 
-    <div class="stock-list">
-        <div style="color:#888; font-size:0.8rem; text-align:center; margin-bottom:10px;">👇 FILTERED STOCKS 👇</div>
-        
+    <div class="right-panel">
+        <div class="mini-title">TODAY STOCKS</div>
         {% for stock in stocks %}
-            {% if filter_code == 'ALL' or stock.cat == filter_code %}
-            <div class="stock-card">
-                <div>
-                    <span class="st-name">{{ stock.name }}</span>
-                    <span class="st-cat">{{ stock.cat }}</span>
-                </div>
-                <div class="st-price">₹{{ stock.price }}</div>
-            </div>
+            {% if winner == 'ALL' or stock.cat == winner %}
+            <div class="mini-item">{{ stock.name }}</div>
             {% endif %}
         {% endfor %}
     </div>
+</div>
 
+<div class="filter-bar">
+    <div id="btn-ALL" class="filter-btn active" onclick="filterStocks('ALL')">ALL STOCK</div>
+    <div id="btn-TODAY" class="filter-btn" onclick="filterStocks('TODAY')">TODAY STOCK</div>
+    <div id="btn-PREV" class="filter-btn" onclick="filterStocks('PREV')">PREVIOUS</div>
+</div>
+
+<div class="main-list">
+    {% for stock in stocks %}
+    <div class="stock-card" data-cat="{{ stock.cat }}">
+        <div class="st-name">{{ stock.name }}</div>
+        <div class="st-price">₹{{ stock.price }}</div>
+    </div>
+    {% endfor %}
 </div>
 
 </body>
@@ -237,7 +267,7 @@ def index():
         token = stock["token"]
         stock["price"] = live_data.get(token, "0.00")
     
-    return render_template_string(HTML_TEMPLATE, status=market_status, ans1=ans1_nifty, ans2=ans2_sector, stocks=STOCKS, filter_code=winning_sector_code)
+    return render_template_string(HTML_TEMPLATE, status=market_status, ans1=ans1_nifty, ans2=ans2_sector, stocks=STOCKS, winner=winning_sector_code)
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
