@@ -32,13 +32,13 @@ TOKEN_MAP = {
 
     # STOCKS (Corrected Tokens)
     "SOUTHBANK":  {"token": "532218", "exch": "BSE", "symbol": "SOUTHBANK"}, # BSE Token
-    "CENTRALBK":  {"token": "1563",   "exch": "NSE", "symbol": "CENTRALBK-EQ"},
-    "UCOBANK":    {"token": "1164",   "exch": "NSE", "symbol": "UCOBANK-EQ"},
-    "IDFCFIRSTB": {"token": "11184",  "exch": "NSE", "symbol": "IDFCFIRSTB-EQ"},
-    "RTNINDIA":   {"token": "13425",  "exch": "NSE", "symbol": "RTNINDIA-EQ"}, # Back to EQ
-    "OLAELEC":    {"token": "29135",  "exch": "NSE", "symbol": "OLAELEC-EQ"},
-    "TTML":       {"token": "3515",   "exch": "NSE", "symbol": "TTML-EQ"},     # Back to EQ
-    "HFCL":       {"token": "1363",   "exch": "NSE", "symbol": "HFCL-EQ"}
+    "CENTRALBK":  {"token": "1563",   "exch": "BSE", "symbol": "CENTRALBK-EQ"},
+    "UCOBANK":    {"token": "1164",   "exch": "BSE", "symbol": "UCOBANK-EQ"},
+    "IDFCFIRSTB": {"token": "11184",  "exch": "BSE", "symbol": "IDFCFIRSTB-EQ"},
+    "RTNINDIA":   {"token": "13425",  "exch": "BSE", "symbol": "RTNINDIA-EQ"}, # Back to EQ
+    "OLAELEC":    {"token": "29135",  "exch": "BSE", "symbol": "OLAELEC-EQ"},
+    "TTML":       {"token": "3515",   "exch": "BSE", "symbol": "TTML-EQ"},     # Back to EQ
+    "HFCL":       {"token": "1363",   "exch": "BSE", "symbol": "HFCL-EQ"}
 }
 
 STOCK_CATEGORY = {
