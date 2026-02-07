@@ -25,20 +25,20 @@ data_fetched_once = False
 # Southbank BSE var aahe, bakiche NSE var aahet.
 TOKEN_MAP = {
     # INDICES
-    "NIFTY":      {"token": "99926000", "exch": "NSE", "symbol": "Nifty 50"},
-    "BANKNIFTY":  {"token": "99926009", "exch": "NSE", "symbol": "Nifty Bank"},
-    "NIFTY_IT":   {"token": "99926004", "exch": "NSE", "symbol": "Nifty IT"},
-    "NIFTY_AUTO": {"token": "99926002", "exch": "NSE", "symbol": "Nifty Auto"},
+    "NIFTY":      {"token": "99926000", "exch": "BSE", "symbol": "Nifty 50"},
+    "BANKNIFTY":  {"token": "99926009", "exch": "BSE", "symbol": "Nifty Bank"},
+    "NIFTY_IT":   {"token": "99926004", "exch": "BSE", "symbol": "Nifty IT"},
+    "NIFTY_AUTO": {"token": "99926002", "exch": "BSE", "symbol": "Nifty Auto"},
 
     # STOCKS (Corrected Tokens)
     "SOUTHBANK":  {"token": "532218", "exch": "BSE", "symbol": "SOUTHBANK"}, # BSE Token
-    "CENTRALBK":  {"token": "1563",   "exch": "BSE", "symbol": "CENTRALBK-EQ"},
-    "UCOBANK":    {"token": "1164",   "exch": "BSE", "symbol": "UCOBANK-EQ"},
-    "IDFCFIRSTB": {"token": "11184",  "exch": "BSE", "symbol": "IDFCFIRSTB-EQ"},
-    "RTNINDIA":   {"token": "13425",  "exch": "BSE", "symbol": "RTNINDIA-EQ"}, # Back to EQ
-    "OLAELEC":    {"token": "29135",  "exch": "BSE", "symbol": "OLAELEC-EQ"},
-    "TTML":       {"token": "3515",   "exch": "BSE", "symbol": "TTML-EQ"},     # Back to EQ
-    "HFCL":       {"token": "1363",   "exch": "BSE", "symbol": "HFCL-EQ"}
+    "CENTRALBK":  {"token": "1563",   "exch": "BSE", "symbol": "CENTRALBK"},
+    "UCOBANK":    {"token": "1164",   "exch": "BSE", "symbol": "UCOBANK"},
+    "IDFCFIRSTB": {"token": "11184",  "exch": "BSE", "symbol": "IDFCFIRSTB"},
+    "RTNINDIA":   {"token": "13425",  "exch": "BSE", "symbol": "RTNINDIA"}, # Back to EQ
+    "OLAELEC":    {"token": "29135",  "exch": "BSE", "symbol": "OLAELEC"},
+    "TTML":       {"token": "3515",   "exch": "BSE", "symbol": "TTML"},     # Back to EQ
+    "HFCL":       {"token": "1363",   "exch": "BSE", "symbol": "HFCL"}
 }
 
 STOCK_CATEGORY = {
