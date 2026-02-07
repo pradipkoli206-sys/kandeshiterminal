@@ -21,7 +21,7 @@ ans2_sector = "LOADING..."
 winning_sector_code = "ALL"
 data_fetched_once = False
 
-# --- 2. DATA SETUP (CORRECT REAL TOKENS) ---
+# --- 2. DATA SETUP (OLD STRUCTURE - CORRECT TOKENS) ---
 TOKEN_MAP = {
     # INDICES
     "NIFTY": "99926000",       
@@ -29,15 +29,15 @@ TOKEN_MAP = {
     "NIFTY_IT": "99926004",    
     "NIFTY_AUTO": "99926002",  
 
-    # STOCKS (REAL NSE TOKENS)
-    "SOUTHBANK": "3351",       # South Indian Bank
-    "CENTRALBK": "1563",       # Central Bank
-    "UCOBANK": "1164",         # UCO Bank
-    "IDFCFIRSTB": "11184",     # IDFC First Bank
-    "RTNINDIA": "13425",       # RattanIndia
-    "OLAELEC": "29135",        # Ola Electric
-    "TTML": "3515",            # TTML
-    "HFCL": "1363"             # HFCL
+    # STOCKS (REAL NSE TOKENS - PRICE FIX)
+    "SOUTHBANK": "3351",       
+    "CENTRALBK": "1563",       
+    "UCOBANK": "1164",         
+    "IDFCFIRSTB": "11184",     
+    "RTNINDIA": "13425",       
+    "OLAELEC": "29135",        
+    "TTML": "3515",            
+    "HFCL": "1363"             
 }
 
 STOCK_CATEGORY = {
@@ -74,8 +74,8 @@ def start_engine():
                 market_status = "CLOSED"
 
             if not is_market_open and data_fetched_once:
-                time.sleep(10) 
-                continue 
+                time.sleep(10)
+                continue
 
             if smart_api is None:
                 totp = pyotp.TOTP(TOTP_KEY).now()
@@ -89,8 +89,16 @@ def start_engine():
 
             for name, token in TOKEN_MAP.items():
                 try:
-                    res = smart_api.ltpData("NSE", name + "-EQ", token)
-                    if "NIFTY" in name: res = smart_api.ltpData("NSE", name, token)
+                    # FIX: Symbol Logic (Indices vs Stocks)
+                    if "NIFTY" in name:
+                        symbol = name
+                        if name == "NIFTY": symbol = "Nifty 50"
+                        if name == "BANKNIFTY": symbol = "Nifty Bank"
+                        if name == "NIFTY_IT": symbol = "Nifty IT"
+                        if name == "NIFTY_AUTO": symbol = "Nifty Auto"
+                        res = smart_api.ltpData("NSE", symbol, token)
+                    else:
+                        res = smart_api.ltpData("NSE", name + "-EQ", token)
                     
                     if res and res['status']:
                         ltp = float(res['data']['ltp'])
@@ -132,7 +140,7 @@ t = threading.Thread(target=start_engine)
 t.daemon = True
 t.start()
 
-# --- 4. HTML TEMPLATE (CLEAR & SHARP UI) ---
+# --- 4. HTML TEMPLATE (SHARP UI + DATE) ---
 HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -140,10 +148,10 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
 <title>AI TRADER</title>
 <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
-/* --- SHARP & CLEAR THEME --- */
+/* --- SHARP UI (No Blur) --- */
 :root {
-    --bg-color: #0b1120; /* Dark Blue Black */
-    --card-bg: #1e293b;  /* Solid Dark Grey */
+    --bg-color: #0b1120;
+    --card-bg: #1e293b;
     --border-color: #334155;
     --text-white: #ffffff;
     --text-grey: #94a3b8;
@@ -151,127 +159,49 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
     --red: #ef4444;
     --blue: #3b82f6;
 }
-
 * { box-sizing: border-box; }
 body { 
     background: var(--bg-color); 
     color: var(--text-white); 
     font-family: 'Roboto', sans-serif; 
-    margin: 0; 
-    height: 100vh; 
-    display: flex; 
-    flex-direction: column; 
-    overflow: hidden;
+    margin: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden;
 }
 
 /* HEADER */
 .header {
-    padding: 12px 15px;
-    background: #111827;
-    border-bottom: 1px solid var(--border-color);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
+    padding: 12px 15px; background: #111827; border-bottom: 1px solid var(--border-color);
+    display: flex; justify-content: space-between; align-items: center;
 }
 .brand { font-weight: 700; font-size: 1rem; color: var(--blue); letter-spacing: 1px; }
-.date-time { font-size: 0.8rem; color: var(--text-grey); font-weight: 500; }
-.status-dot { height: 8px; width: 8px; background: var(--green); border-radius: 50%; display: inline-block; margin-right: 5px; }
+.date-time { font-size: 0.8rem; color: var(--text-grey); font-weight: 500; text-align: right; }
+.status-ind { font-size: 0.7rem; color: #fff; margin-top:2px; display:flex; align-items:center; justify-content:flex-end; gap:5px;}
+.dot { width: 8px; height: 8px; background: var(--green); border-radius: 50%; }
 
 /* TOP SECTION */
-.top-container {
-    display: flex;
-    height: 40%;
-    border-bottom: 1px solid var(--border-color);
-}
-
-/* Left Panel (Q&A) */
-.left-panel {
-    flex: 6.5;
-    padding: 20px;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    border-right: 1px solid var(--border-color);
-    background: var(--bg-color);
-}
+.top-container { display: flex; height: 40%; border-bottom: 1px solid var(--border-color); }
+.left-panel { flex: 6.5; padding: 20px; display: flex; flex-direction: column; justify-content: center; border-right: 1px solid var(--border-color); background: var(--bg-color); }
 .q-box { margin-bottom: 25px; }
 .q-label { color: var(--text-grey); font-size: 0.85rem; font-weight: 500; margin-bottom: 5px; }
 .a-value { font-size: 1.5rem; font-weight: 700; color: var(--text-white); letter-spacing: 0.5px; }
 .green-txt { color: var(--green); }
 .red-txt { color: var(--red); }
 
-/* Right Panel (Today Stocks) */
-.right-panel {
-    flex: 3.5;
-    background: #111827;
-    display: flex;
-    flex-direction: column;
-}
-.panel-header {
-    padding: 10px;
-    font-size: 0.75rem;
-    font-weight: 700;
-    text-align: center;
-    border-bottom: 1px solid var(--border-color);
-    color: var(--blue);
-    background: #1f2937;
-}
+.right-panel { flex: 3.5; background: #111827; display: flex; flex-direction: column; }
+.panel-header { padding: 10px; font-size: 0.75rem; font-weight: 700; text-align: center; border-bottom: 1px solid var(--border-color); color: var(--blue); background: #1f2937; }
 .mini-list-content { overflow-y: auto; flex: 1; }
-.mini-item {
-    font-size: 0.85rem;
-    padding: 10px;
-    border-bottom: 1px solid #1f2937;
-    color: var(--text-white);
-    font-weight: 500;
-}
+.mini-item { font-size: 0.85rem; padding: 10px; border-bottom: 1px solid #1f2937; color: var(--text-white); font-weight: 500; }
 
 /* FILTER BAR */
-.filter-bar {
-    padding: 10px 15px;
-    display: flex;
-    gap: 10px;
-    background: #0f172a;
-    border-bottom: 1px solid var(--border-color);
-}
-.filter-btn {
-    flex: 1;
-    background: #1e293b;
-    border: 1px solid var(--border-color);
-    color: var(--text-grey);
-    padding: 8px 0;
-    border-radius: 6px;
-    font-size: 0.8rem;
-    font-weight: 500;
-    cursor: pointer;
-    text-align: center;
-}
-.filter-btn.active {
-    background: var(--blue);
-    color: white;
-    border-color: var(--blue);
-}
+.filter-bar { padding: 10px 15px; display: flex; gap: 10px; background: #0f172a; border-bottom: 1px solid var(--border-color); }
+.filter-btn { flex: 1; background: #1e293b; border: 1px solid var(--border-color); color: var(--text-grey); padding: 8px 0; border-radius: 6px; font-size: 0.8rem; font-weight: 500; cursor: pointer; text-align: center; }
+.filter-btn.active { background: var(--blue); color: white; border-color: var(--blue); }
 
 /* MAIN LIST */
-.main-list {
-    flex: 1;
-    overflow-y: auto;
-    padding: 15px;
-    background: var(--bg-color);
-}
-.stock-card {
-    background: var(--card-bg);
-    border: 1px solid var(--border-color);
-    padding: 15px;
-    border-radius: 8px; /* Sharp corners, no huge roundness */
-    margin-bottom: 10px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
+.main-list { flex: 1; overflow-y: auto; padding: 15px; background: var(--bg-color); }
+.stock-card { background: var(--card-bg); border: 1px solid var(--border-color); padding: 15px; border-radius: 8px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
 .st-name { font-size: 1rem; font-weight: 700; color: var(--text-white); }
 .st-cat { font-size: 0.7rem; color: var(--text-grey); margin-top: 3px; }
 .st-price { font-size: 1.1rem; font-weight: 700; color: var(--green); }
-
 .hidden { display: none !important; }
 </style>
 <script>
@@ -280,10 +210,9 @@ let activeFilter = "ALL";
 
 function updateTime(){
     const now = new Date();
-    // DATE ADDED HERE
     const dateStr = now.toLocaleDateString('en-GB', {day: 'numeric', month: 'short', year: '2-digit'});
     const timeStr = now.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit'});
-    document.getElementById('date-time-disp').innerText = dateStr + " | " + timeStr;
+    document.getElementById('dt-disp').innerText = dateStr + " | " + timeStr;
 } 
 setInterval(updateTime,1000); 
 
@@ -299,24 +228,18 @@ function applyFilter() {
     cards.forEach(card => {
         const cat = card.getAttribute('data-cat');
         let show = false;
-        
         if (activeFilter === 'ALL') show = true;
         else if (activeFilter === 'TODAY') {
             if (currentWinner === 'ALL' || cat === currentWinner) show = true;
-        } else if (activeFilter === 'PREV') {
-            show = false; 
         }
-
-        if(show) card.classList.remove('hidden');
-        else card.classList.add('hidden');
+        if(show) card.classList.remove('hidden'); else card.classList.add('hidden');
     });
     
     // Update Mini List
     const miniItems = document.querySelectorAll('.mini-item');
     miniItems.forEach(item => {
         const cat = item.getAttribute('data-cat');
-        if (currentWinner === 'ALL' || cat === currentWinner) item.style.display = 'block';
-        else item.style.display = 'none';
+        if (currentWinner === 'ALL' || cat === currentWinner) item.style.display = 'block'; else item.style.display = 'none';
     });
 }
 
@@ -339,7 +262,6 @@ function fetchData() {
             const el = document.getElementById('price-' + s.name);
             if(el) el.innerText = "₹" + s.price;
         });
-
         applyFilter();
     });
 }
@@ -350,11 +272,9 @@ setInterval(fetchData, 1000);
 
 <div class="header">
     <div class="brand">AI TRADER</div>
-    <div style="text-align:right;">
-        <div class="date-time" id="date-time-disp">-- | --:--</div>
-        <div style="font-size:0.7rem; color:#aaa; margin-top:2px;">
-            <span class="status-dot"></span><span id="status-disp">{{ status }}</span>
-        </div>
+    <div>
+        <div class="date-time" id="dt-disp">-- | --:--</div>
+        <div class="status-ind"><span class="dot"></span><span id="status-disp">{{ status }}</span></div>
     </div>
 </div>
 
@@ -369,7 +289,6 @@ setInterval(fetchData, 1000);
             <div class="a-value" style="color:var(--blue);" id="ans2-disp">{{ ans2 }}</div>
         </div>
     </div>
-
     <div class="right-panel">
         <div class="panel-header">🚀 TODAY'S PICKS</div>
         <div class="mini-list-content">
