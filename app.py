@@ -20,41 +20,95 @@ ans1_nifty = "WAIT..."
 ans2_sector = "LOADING..."
 winning_sector_code = "ALL"
 data_fetched_once = False
+tokens_loaded = False  # Flag to ensure we scan only once
 
-# --- 2. DATA SETUP (CORRECT TOKENS & EXCHANGES) ---
-# Southbank BSE var aahe, bakiche NSE var aahet.
-TOKEN_MAP = {
-    # INDICES
-    "NIFTY":      {"token": "99926000", "exch": "NSE", "symbol": "Nifty 50"},
-    "BANKNIFTY":  {"token": "99926009", "exch": "NSE", "symbol": "Nifty Bank"},
-    "NIFTY_IT":   {"token": "99926004", "exch": "NSE", "symbol": "Nifty IT"},
-    "NIFTY_AUTO": {"token": "99926002", "exch": "NSE", "symbol": "Nifty Auto"},
+# --- 2. STOCK CONFIGURATION (ONLY NAMES) ---
+# Aapan tokens hardcode nahi karnar, te auto-scan hoti.
+TARGET_STOCKS = [
+    {"name": "SOUTHBANK", "cat": "BANK"},
+    {"name": "CENTRALBK", "cat": "BANK"},
+    {"name": "UCOBANK",   "cat": "BANK"},
+    {"name": "IDFCFIRSTB","cat": "BANK"},
+    {"name": "RTNINDIA",  "cat": "POWER"},
+    {"name": "OLAELEC",   "cat": "AUTO"},
+    {"name": "TTML",      "cat": "IT"},
+    {"name": "HFCL",      "cat": "IT"}
+]
 
-    # STOCKS (Corrected Tokens)
-    "SOUTHBANK":  {"token": "532218", "exch": "BSE", "symbol": "SOUTHBANK"}, # BSE Token
-    "CENTRALBK":  {"token": "1563",   "exch": "NSE", "symbol": "CENTRALBK-EQ"},
-    "UCOBANK":    {"token": "1164",   "exch": "NSE", "symbol": "UCOBANK-EQ"},
-    "IDFCFIRSTB": {"token": "11184",  "exch": "NSE", "symbol": "IDFCFIRSTB-EQ"},
-    "RTNINDIA":   {"token": "13425",  "exch": "NSE", "symbol": "RTNINDIA-EQ"}, # Back to EQ
-    "OLAELEC":    {"token": "29135",  "exch": "NSE", "symbol": "OLAELEC-EQ"},
-    "TTML":       {"token": "3515",   "exch": "NSE", "symbol": "TTML-EQ"},     # Back to EQ
-    "HFCL":       {"token": "1363",   "exch": "NSE", "symbol": "HFCL-EQ"}
-}
+# Indices che tokens fix astat
+INDICES_LIST = [
+    {"name": "NIFTY",      "token": "99926000", "symbol": "Nifty 50"},
+    {"name": "BANKNIFTY",  "token": "99926009", "symbol": "Nifty Bank"},
+    {"name": "NIFTY_IT",   "token": "99926004", "symbol": "Nifty IT"},
+    {"name": "NIFTY_AUTO", "token": "99926002", "symbol": "Nifty Auto"}
+]
 
-STOCK_CATEGORY = {
-    "SOUTHBANK": "BANK", "CENTRALBK": "BANK", "UCOBANK": "BANK", "IDFCFIRSTB": "BANK",
-    "OLAELEC": "AUTO", "RTNINDIA": "POWER", "TTML": "IT", "HFCL": "IT"
-}
-
+# Final List jo UI la pathavla jail (Auto-filled)
 STOCKS = []
-for name, details in TOKEN_MAP.items():
-    if "NIFTY" not in name:
-        cat = STOCK_CATEGORY.get(name, "OTHER")
-        STOCKS.append({"name": name, "token": details["token"], "price": "0.00", "cat": cat})
 
-# --- 3. ENGINE (PLAN B: SAFE MODE) ---
+# --- 3. AUTO-SCANNER FUNCTION (SOLUTION FOR AB1018) ---
+def fetch_correct_tokens(smart_api):
+    global STOCKS
+    print("\n>>> STARTING NSE TOKEN SCANNER <<<")
+    temp_stocks = []
+    
+    for item in TARGET_STOCKS:
+        name = item["name"]
+        cat = item["cat"]
+        try:
+            # 1. Search Scrip on NSE
+            search_data = smart_api.searchScrip("NSE", name)
+            
+            found_token = None
+            found_symbol = None
+            
+            if search_data:
+                # Priority 1: Check for '-EQ' (Equity)
+                for s in search_data:
+                    if s['tradingsymbol'] == name + "-EQ":
+                        found_token = s['symboltoken']
+                        found_symbol = s['tradingsymbol']
+                        break
+                
+                # Priority 2: Check for '-BE' (Book Entry - T2T Segment) -> RTNINDIA/TTML often here
+                if not found_token:
+                    for s in search_data:
+                        if s['tradingsymbol'] == name + "-BE":
+                            found_token = s['symboltoken']
+                            found_symbol = s['tradingsymbol']
+                            break
+                
+                # Priority 3: Exact Name
+                if not found_token:
+                    for s in search_data:
+                        if s['tradingsymbol'] == name:
+                            found_token = s['symboltoken']
+                            found_symbol = s['tradingsymbol']
+                            break
+            
+            if found_token:
+                print(f"✅ FOUND: {name} -> {found_symbol} (Token: {found_token})")
+                temp_stocks.append({
+                    "name": name, 
+                    "token": found_token, 
+                    "symbol": found_symbol, 
+                    "cat": cat, 
+                    "price": "0.00"
+                })
+            else:
+                print(f"❌ FAILED: Could not find NSE token for {name}")
+                # Fallback: Add without token to avoid UI crash
+                temp_stocks.append({"name": name, "token": None, "cat": cat, "price": "ERR"})
+                
+        except Exception as e:
+            print(f"Error scanning {name}: {e}")
+    
+    STOCKS = temp_stocks
+    print(">>> SCAN COMPLETE <<<\n")
+
+# --- 4. ENGINE ---
 def start_engine():
-    global live_data, market_status, ans1_nifty, ans2_sector, winning_sector_code, data_fetched_once
+    global live_data, market_status, ans1_nifty, ans2_sector, winning_sector_code, data_fetched_once, tokens_loaded
     smart_api = None
     
     while True:
@@ -66,7 +120,6 @@ def start_engine():
             
             start_time = datetime.strptime("09:00", "%H:%M").time()
             end_time = datetime.strptime("15:30", "%H:%M").time()
-
             is_market_open = (weekday < 5 and start_time <= current_time <= end_time)
             
             if is_market_open:
@@ -78,77 +131,83 @@ def start_engine():
                 time.sleep(10)
                 continue
 
-            # Login Logic
             if smart_api is None:
                 try:
                     totp = pyotp.TOTP(TOTP_KEY).now()
                     smart_api = SmartConnect(api_key=API_KEY)
                     data = smart_api.generateSession(CLIENT_ID, PASSWORD, totp)
                     if not data['status']:
-                        print("Login Failed:", data)
+                        print("Login Failed")
                         time.sleep(5)
                         continue
-                except Exception as e:
-                    print("Login Error:", e)
+                    else:
+                        # LOGIN SUCCESS -> RUN SCANNER
+                        if not tokens_loaded:
+                            fetch_correct_tokens(smart_api)
+                            tokens_loaded = True
+                except:
                     time.sleep(5)
                     continue
+            
+            # If tokens not loaded yet, wait
+            if not tokens_loaded:
+                time.sleep(1)
+                continue
 
             bank_change = -100.0; it_change = -100.0; auto_change = -100.0
 
-            # --- PLAN B LOOP: ONE BY ONE SAFE FETCH ---
-            for name, details in TOKEN_MAP.items():
+            # 1. Fetch Indices
+            for ind in INDICES_LIST:
                 try:
-                    # Fetching Data
-                    res = smart_api.ltpData(details["exch"], details["symbol"], details["token"])
-                    
+                    res = smart_api.ltpData("NSE", ind["symbol"], ind["token"])
                     if res and res['status']:
                         ltp = float(res['data']['ltp'])
                         close = float(res['data']['close'])
-                        live_data[details["token"]] = ltp
-
                         change = ltp - close
                         pct_change = (change / close) * 100
                         
-                        if name == "NIFTY": 
-                            ans1_nifty = "POSITIVE ▲" if change > 0 else "NEGATIVE ▼"
-                        
-                        if name == "BANKNIFTY": bank_change = pct_change
-                        elif name == "NIFTY_IT": it_change = pct_change
-                        elif name == "NIFTY_AUTO": auto_change = pct_change
-                    else:
-                        print(f"Failed to fetch {name}: {res}")
+                        if ind["name"] == "NIFTY": ans1_nifty = "POSITIVE ▲" if change > 0 else "NEGATIVE ▼"
+                        if ind["name"] == "BANKNIFTY": bank_change = pct_change
+                        elif ind["name"] == "NIFTY_IT": it_change = pct_change
+                        elif ind["name"] == "NIFTY_AUTO": auto_change = pct_change
+                except: pass
 
-                except Exception as e:
-                    print(f"Exception for {name}: {e}")
+            # 2. Fetch Stocks (Using Auto-Detected Tokens)
+            for stock in STOCKS:
+                if stock["token"] is None: continue # Skip failed tokens
                 
-                # IMPORTANT: 0.5 Second Delay (PLAN B SAFE MODE)
-                # This prevents 'Rate Limit Exceeded' and 'AB1018' caused by spamming
-                time.sleep(0.5)
-            
+                try:
+                    res = smart_api.ltpData("NSE", stock["symbol"], stock["token"])
+                    if res and res['status']:
+                        ltp = float(res['data']['ltp'])
+                        live_data[stock["token"]] = ltp
+                        stock["price"] = ltp # Update local list for UI
+                    else:
+                        pass # print(f"Fetch failed for {stock['name']}")
+                except:
+                    pass
+                
+                time.sleep(0.3) # Safe delay
+
             # Sector Logic
             if bank_change > -90 and it_change > -90 and auto_change > -90:
                 if bank_change > it_change and bank_change > auto_change:
-                    ans2_sector = "BANKING"
-                    winning_sector_code = "BANK"
+                    ans2_sector = "BANKING"; winning_sector_code = "BANK"
                 elif it_change > bank_change and it_change > auto_change:
-                    ans2_sector = "IT / TECH"
-                    winning_sector_code = "IT"
+                    ans2_sector = "IT / TECH"; winning_sector_code = "IT"
                 elif auto_change > bank_change and auto_change > it_change:
-                    ans2_sector = "AUTO"
-                    winning_sector_code = "AUTO"
+                    ans2_sector = "AUTO"; winning_sector_code = "AUTO"
                 else:
-                    ans2_sector = "MIXED"
-                    winning_sector_code = "ALL"
+                    ans2_sector = "MIXED"; winning_sector_code = "ALL"
             else:
-                 if ans2_sector == "LOADING...":
-                     ans2_sector = "WAIT..."
+                 if ans2_sector == "LOADING...": ans2_sector = "WAIT..."
 
             if not is_market_open:
                 data_fetched_once = True
             
             time.sleep(1)
         except Exception as e:
-            print("Engine Crash:", e)
+            print("Engine Error:", e)
             smart_api = None
             time.sleep(5)
 
@@ -341,15 +400,15 @@ setInterval(fetchData, 1000);
 @app.route('/')
 def index():
     for stock in STOCKS:
-        token = stock["token"]
-        stock["price"] = live_data.get(token, "0.00")
+        if stock["token"]:
+            stock["price"] = live_data.get(stock["token"], "0.00")
     return render_template_string(HTML_TEMPLATE, status=market_status, ans1=ans1_nifty, ans2=ans2_sector, stocks=STOCKS, winner=winning_sector_code)
 
 @app.route('/data')
 def data():
     for stock in STOCKS:
-        token = stock["token"]
-        stock["price"] = live_data.get(token, "0.00")
+        if stock["token"]:
+            stock["price"] = live_data.get(stock["token"], "0.00")
     
     return jsonify({
         "status": market_status,
