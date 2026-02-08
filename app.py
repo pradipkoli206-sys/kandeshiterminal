@@ -43,20 +43,24 @@ INDICES_LIST = [
 
 STOCKS = []
 
-# --- 3. AUTO-SCANNER FUNCTION (CRASH FIX APPLIED) ---
+# --- 3. AUTO-SCANNER FUNCTION (SLOWED DOWN TO FIX RATE LIMIT) ---
 def fetch_correct_tokens(smart_api):
     global STOCKS
-    print("\n>>> STARTING NSE TOKEN SCANNER (FIXED) <<<")
+    print("\n>>> STARTING NSE TOKEN SCANNER (SLOW MODE) <<<")
     temp_stocks = []
     
     for item in TARGET_STOCKS:
         name = item["name"]
         cat = item["cat"]
+        
+        # IMPORTANT: Slow down the search to avoid "Access denied" error
+        time.sleep(0.7) 
+        
         try:
             # 1. API Call
             search_response = smart_api.searchScrip("NSE", name)
             
-            # --- CRASH FIX: Handle Response Structure Correctly ---
+            # Handle Response Structure
             scrip_list = []
             if search_response and isinstance(search_response, dict) and 'data' in search_response:
                 scrip_list = search_response['data']
@@ -64,7 +68,6 @@ def fetch_correct_tokens(smart_api):
                 scrip_list = search_response
             else:
                 scrip_list = []
-            # ----------------------------------------------------
 
             found_token = None
             found_symbol = None
@@ -128,7 +131,11 @@ def start_engine():
             start_time = datetime.strptime("09:00", "%H:%M").time()
             end_time = datetime.strptime("15:30", "%H:%M").time()
             is_market_open = (weekday < 5 and start_time <= current_time <= end_time)
-            market_status = "LIVE" if is_market_open else "CLOSED"
+            
+            if is_market_open:
+                market_status = "LIVE"
+            else:
+                market_status = "CLOSED"
 
             if not is_market_open and data_fetched_once:
                 time.sleep(10)
@@ -173,6 +180,7 @@ def start_engine():
                         elif ind["name"] == "NIFTY_IT": it_change = pct_change
                         elif ind["name"] == "NIFTY_AUTO": auto_change = pct_change
                 except: pass
+                time.sleep(0.2) # Small delay for indices
 
             # 2. Fetch Stocks
             for stock in STOCKS:
@@ -189,7 +197,7 @@ def start_engine():
                 except:
                     pass
                 
-                time.sleep(0.3) 
+                time.sleep(0.4) # Safe delay for stocks
 
             # Sector Logic
             if bank_change > -90 and it_change > -90 and auto_change > -90:
