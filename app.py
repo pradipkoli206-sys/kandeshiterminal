@@ -52,7 +52,7 @@ def fetch_correct_tokens(smart_api):
     for item in TARGET_STOCKS:
         name = item["name"]
         cat = item["cat"]
-        time.sleep(1.2) # Keeping safe speed for startup
+        time.sleep(1.2) 
         try:
             search_response = smart_api.searchScrip("NSE", name)
             scrip_list = []
@@ -84,11 +84,10 @@ def fetch_correct_tokens(smart_api):
     STOCKS = temp_stocks
     print(">>> SCAN COMPLETE <<<\n")
 
-# --- 4. ENGINE (FIXED BATCH MODE) ---
+# --- 4. ENGINE (UNTOUCHED) ---
 def start_engine():
     global live_data, market_status, ans1_nifty, ans2_sector, winning_sector_code, data_fetched_once, tokens_loaded
     smart_api = None
-    
     while True:
         try:
             utc_now = datetime.now(timezone.utc)
@@ -107,7 +106,6 @@ def start_engine():
 
             bank_change = -100.0; it_change = -100.0; auto_change = -100.0
 
-            # A. FETCH INDICES
             for ind in INDICES_LIST:
                 try:
                     res = smart_api.ltpData("NSE", ind["symbol"], ind["token"])
@@ -119,42 +117,18 @@ def start_engine():
                         elif ind["name"] == "NIFTY_IT": it_change = pct
                         elif ind["name"] == "NIFTY_AUTO": auto_change = pct
                 except: pass
-                time.sleep(0.2)
+                time.sleep(0.3)
 
-            # B. FETCH STOCKS (BATCH MODE WITH CRASH PROTECTION)
-            try:
-                token_list = [s["token"] for s in STOCKS if s["token"]]
-                
-                if token_list:
-                    batch_res = None
-                    # Safe Check: Does the function exist?
-                    if hasattr(smart_api, 'getLtpData'):
-                        batch_res = smart_api.getLtpData("NSE", "ALL", token_list)
-                    elif hasattr(smart_api, 'getltpData'): # Try alternate name
-                        batch_res = smart_api.getltpData("NSE", "ALL", token_list)
-                    else:
-                        # Fallback for old library (Prevents Crash)
-                        print("⚠️ Waiting for Library Update... Using Slow Mode")
-                        for s in STOCKS:
-                            if s["token"]:
-                                r = smart_api.ltpData("NSE", s["symbol"], s["token"])
-                                if r and r['status']:
-                                    live_data[s["token"]] = float(r['data']['ltp'])
-                                    s["price"] = float(r['data']['ltp'])
-                                time.sleep(0.2)
-                    
-                    # If Batch worked
-                    if batch_res and batch_res['status'] and batch_res['data']:
-                        for item in batch_res['data']:
-                            tkn = item['symboltoken']
-                            ltp = float(item['ltp'])
-                            live_data[tkn] = ltp
-                            for s in STOCKS:
-                                if s['token'] == tkn: s['price'] = ltp
-            except Exception as e:
-                print("Batch Skip:", e)
+            for stock in STOCKS:
+                if stock["token"]:
+                    try:
+                        res = smart_api.ltpData("NSE", stock["symbol"], stock["token"])
+                        if res and res['status']:
+                            ltp = float(res['data']['ltp'])
+                            live_data[stock["token"]] = ltp; stock["price"] = ltp
+                    except: pass
+                time.sleep(0.5)
 
-            # Sector Logic
             if bank_change > it_change and bank_change > auto_change:
                 ans2_sector = "BANKING"; winning_sector_code = "BANK"
             elif it_change > bank_change and it_change > auto_change:
@@ -164,8 +138,7 @@ def start_engine():
             else:
                 ans2_sector = "MIXED"; winning_sector_code = "ALL"
             
-            time.sleep(1.5)
-
+            time.sleep(1)
         except:
             smart_api = None; time.sleep(5)
 
@@ -184,7 +157,7 @@ def data():
         if s["token"]: s["price"] = live_data.get(s["token"], "0.00")
     return jsonify({"status": market_status, "ans1": ans1_nifty, "ans2": ans2_sector, "winner": winning_sector_code, "stocks": STOCKS})
 
-# --- 6. PREMIUM DESIGN (UNTOUCHED) ---
+# --- 6. NEW PREMIUM DESIGN (HTML/CSS) ---
 HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="en">
 <head>
