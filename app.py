@@ -2,7 +2,7 @@ import os
 import pyotp
 import time
 import threading
-from concurrent.futures import ThreadPoolExecutor # हे आहे आपलं नवीन सिक्रेट वेपन
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from flask import Flask, render_template_string, jsonify
 from SmartApi import SmartConnect
@@ -20,8 +20,10 @@ market_status = "CHECKING..."
 ans1_nifty = "WAIT..."
 ans2_sector = "LOADING..."
 winning_sector_code = "ALL"
-data_fetched_once = False
 tokens_loaded = False 
+
+# Sector Logic Variables (Globally shared for Threads)
+sector_snapshot = {"BANKNIFTY": -100.0, "NIFTY_IT": -100.0, "NIFTY_AUTO": -100.0}
 
 # --- 2. STOCK CONFIGURATION (UNTOUCHED) ---
 TARGET_STOCKS = [
@@ -44,7 +46,7 @@ INDICES_LIST = [
 
 STOCKS = []
 
-# --- 3. AUTO-SCANNER (UNTOUCHED - SAFE MODE) ---
+# --- 3. AUTO-SCANNER (UNTOUCHED) ---
 def fetch_correct_tokens(smart_api):
     global STOCKS
     print("\n>>> STARTING NSE TOKEN SCANNER (SAFE MODE) <<<")
@@ -53,7 +55,7 @@ def fetch_correct_tokens(smart_api):
     for item in TARGET_STOCKS:
         name = item["name"]
         cat = item["cat"]
-        time.sleep(0.6) # थोडा फास्ट केला आहे
+        time.sleep(0.6) 
         try:
             search_response = smart_api.searchScrip("NSE", name)
             scrip_list = []
@@ -85,14 +87,32 @@ def fetch_correct_tokens(smart_api):
     STOCKS = temp_stocks
     print(">>> SCAN COMPLETE <<<\n")
 
-# --- 4. ENGINE (MASTER PLAN - PARALLEL WORKERS) ---
-def fetch_stock_price(stock, api_ref):
-    """
-    हे फंक्शन एका स्टॉकचा डेटा आणते. हे आपण एकाच वेळी ३ वेळा चालवणार आहोत.
-    """
+# --- 4. ENGINE (UPDATED: TRUE PARALLEL PROCESSING) ---
+
+# Helper function for Threads (Indices)
+def fetch_index_task(ind, api_ref):
+    global ans1_nifty
+    try:
+        res = api_ref.ltpData("NSE", ind["symbol"], ind["token"])
+        if res and res['status']:
+            ltp = float(res['data']['ltp'])
+            close = float(res['data']['close'])
+            change = ltp - close
+            pct = (change / close) * 100
+            
+            # Update Nifty Global
+            if ind["name"] == "NIFTY":
+                ans1_nifty = "POSITIVE ▲" if change > 0 else "NEGATIVE ▼"
+            
+            # Update Sector Logic
+            if ind["name"] in sector_snapshot:
+                sector_snapshot[ind["name"]] = pct
+    except: pass
+
+# Helper function for Threads (Stocks)
+def fetch_stock_task(stock, api_ref):
     if not stock["token"]: return
     try:
-        # जुनेच ltpData वापरले आहे (No Error Guaranteed)
         res = api_ref.ltpData("NSE", stock["symbol"], stock["token"])
         if res and res['status']:
             ltp = float(res['data']['ltp'])
@@ -104,8 +124,8 @@ def start_engine():
     global live_data, market_status, ans1_nifty, ans2_sector, winning_sector_code, tokens_loaded
     smart_api = None
     
-    # ३ कामगार (Workers) तयार केले जे समांतर काम करतील
-    executor = ThreadPoolExecutor(max_workers=3)
+    # Increased workers to 5 (Handles Indices + Stocks together)
+    executor = ThreadPoolExecutor(max_workers=5)
 
     while True:
         try:
@@ -123,33 +143,26 @@ def start_engine():
 
             if not tokens_loaded: time.sleep(1); continue
 
-            bank_change = -100.0; it_change = -100.0; auto_change = -100.0
-
-            # A. Indices Fetching (Fast Loop)
-            for ind in INDICES_LIST:
-                try:
-                    res = smart_api.ltpData("NSE", ind["symbol"], ind["token"])
-                    if res and res['status']:
-                        ltp = float(res['data']['ltp']); close = float(res['data']['close'])
-                        change = ltp - close; pct = (change / close) * 100
-                        if ind["name"] == "NIFTY": ans1_nifty = "POSITIVE ▲" if change > 0 else "NEGATIVE ▼"
-                        if ind["name"] == "BANKNIFTY": bank_change = pct
-                        elif ind["name"] == "NIFTY_IT": it_change = pct
-                        elif ind["name"] == "NIFTY_AUTO": auto_change = pct
-                except: pass
-                time.sleep(0.1)
-
-            # B. STOCK FETCHING (PARALLEL MAGIC)
-            # एकामागोमाग एक न करता, ३ स्टॉक्स एकाच वेळी चेक होतील
+            # --- PARALLEL EXECUTION START ---
             futures = []
-            for stock in STOCKS:
-                futures.append(executor.submit(fetch_stock_price, stock, smart_api))
             
-            # सर्व कामगारांचे काम संपेपर्यंत वाट पाहणे (हे खूप फास्ट होईल)
+            # 1. Add Indices to Workers (No more waiting!)
+            for ind in INDICES_LIST:
+                futures.append(executor.submit(fetch_index_task, ind, smart_api))
+            
+            # 2. Add Stocks to Workers
+            for stock in STOCKS:
+                futures.append(executor.submit(fetch_stock_task, stock, smart_api))
+            
+            # 3. Wait for ALL data (This happens very fast now)
             for f in futures:
                 f.result()
 
-            # C. Sector Logic
+            # --- SECTOR LOGIC (Instant Calculation) ---
+            bank_change = sector_snapshot["BANKNIFTY"]
+            it_change = sector_snapshot["NIFTY_IT"]
+            auto_change = sector_snapshot["NIFTY_AUTO"]
+
             if bank_change > it_change and bank_change > auto_change:
                 ans2_sector = "BANKING"; winning_sector_code = "BANK"
             elif it_change > bank_change and it_change > auto_change:
@@ -159,14 +172,15 @@ def start_engine():
             else:
                 ans2_sector = "MIXED"; winning_sector_code = "ALL"
             
-            time.sleep(1.0) # Refresh Rate
+            # Reduced sleep for faster refresh
+            time.sleep(0.5)
 
         except:
             smart_api = None; time.sleep(5)
 
 t = threading.Thread(target=start_engine); t.daemon = True; t.start()
 
-# --- 5. ROUTES ---
+# --- 5. ROUTES (UNTOUCHED) ---
 @app.route('/')
 def index():
     for s in STOCKS:
@@ -179,7 +193,7 @@ def data():
         if s["token"]: s["price"] = live_data.get(s["token"], "0.00")
     return jsonify({"status": market_status, "ans1": ans1_nifty, "ans2": ans2_sector, "winner": winning_sector_code, "stocks": STOCKS})
 
-# --- 6. PREMIUM DESIGN (HTML) ---
+# --- 6. PREMIUM DESIGN (UNTOUCHED) ---
 HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -187,55 +201,175 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
 <title>AI TRADER PRO</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
 <style>
-:root { --bg-main: #0a0e17; --bg-card: #151a25; --text-main: #ffffff; --text-muted: #8b9bb4; --border: #2a3441; --accent-blue: #3772ff; --accent-green: #00e396; --accent-red: #ff4560; }
+/* --- PREMIUM THEME --- */
+:root {
+    --bg-main: #0a0e17;
+    --bg-card: #151a25;
+    --text-main: #ffffff;
+    --text-muted: #8b9bb4;
+    --border: #2a3441;
+    --accent-blue: #3772ff;
+    --accent-green: #00e396;
+    --accent-red: #ff4560;
+}
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-body { background-color: var(--bg-main); color: var(--text-main); font-family: 'Inter', sans-serif; margin: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
-.header { padding: 15px 20px; background: rgba(21, 26, 37, 0.95); border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; backdrop-filter: blur(10px); }
+body { 
+    background-color: var(--bg-main); 
+    color: var(--text-main); 
+    font-family: 'Inter', sans-serif; 
+    margin: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+}
+
+/* HEADER */
+.header {
+    padding: 15px 20px; 
+    background: rgba(21, 26, 37, 0.95); 
+    border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center;
+    backdrop-filter: blur(10px);
+}
 .brand { font-size: 18px; font-weight: 800; letter-spacing: 0.5px; background: linear-gradient(45deg, #3772ff, #9b5de5); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
 .status-badge { font-size: 11px; font-weight: 600; padding: 4px 8px; border-radius: 4px; background: #1c222e; color: var(--text-muted); border: 1px solid var(--border); }
+
+/* TOP METRICS */
 .dashboard { display: flex; border-bottom: 1px solid var(--border); height: 35%; }
 .metric-panel { flex: 1; padding: 20px; display: flex; flex-direction: column; justify-content: center; border-right: 1px solid var(--border); }
 .metric-label { color: var(--text-muted); font-size: 11px; font-weight: 600; letter-spacing: 1px; margin-bottom: 8px; text-transform: uppercase; }
 .metric-value { font-size: 22px; font-weight: 700; line-height: 1.2; }
 .txt-green { color: var(--accent-green); }
 .txt-red { color: var(--accent-red); }
+
+/* SIDE PANEL (TODAY'S PICK) */
 .side-panel { width: 35%; background: #11151e; border-left: 1px solid var(--border); display: flex; flex-direction: column; }
 .panel-head { padding: 12px; font-size: 11px; font-weight: 700; color: var(--accent-blue); text-align: center; border-bottom: 1px solid var(--border); background: #161b26; letter-spacing: 0.5px; }
 .pick-list { overflow-y: auto; flex: 1; }
 .pick-item { padding: 10px 15px; font-size: 12px; font-weight: 500; border-bottom: 1px solid #1e2532; color: #cbd5e1; }
+
+/* FILTERS */
 .filter-bar { padding: 12px 15px; display: flex; gap: 10px; background: var(--bg-main); border-bottom: 1px solid var(--border); }
 .chip { flex: 1; background: var(--bg-card); border: 1px solid var(--border); color: var(--text-muted); padding: 10px; border-radius: 8px; font-size: 11px; font-weight: 600; text-align: center; cursor: pointer; transition: all 0.2s; }
 .chip.active { background: var(--accent-blue); color: white; border-color: var(--accent-blue); box-shadow: 0 4px 12px rgba(55, 114, 255, 0.3); }
+
+/* STOCK LIST */
 .market-list { flex: 1; overflow-y: auto; padding: 15px; }
-.stock-card { background: var(--bg-card); border: 1px solid var(--border); padding: 16px; border-radius: 12px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+.stock-card { 
+    background: var(--bg-card); 
+    border: 1px solid var(--border); 
+    padding: 16px; 
+    border-radius: 12px; 
+    margin-bottom: 12px; 
+    display: flex; justify-content: space-between; align-items: center;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+}
 .st-info { display: flex; flex-direction: column; }
 .st-name { font-size: 14px; font-weight: 700; color: var(--text-main); margin-bottom: 4px; }
 .st-cat { font-size: 10px; font-weight: 600; color: var(--text-muted); background: #1e2532; padding: 3px 6px; border-radius: 4px; width: fit-content; }
 .st-price { font-size: 16px; font-weight: 700; color: var(--text-main); letter-spacing: 0.5px; }
 .hidden { display: none !important; }
+
+/* ANIMATION */
 @keyframes pulse { 0% { opacity: 0.6; } 50% { opacity: 1; } 100% { opacity: 0.6; } }
 .loading { animation: pulse 1.5s infinite; }
 </style>
 <script>
 let currentWinner = "ALL";
 let activeFilter = "ALL";
-function filterStocks(type) { activeFilter = type; document.querySelectorAll('.chip').forEach(b => b.classList.remove('active')); document.getElementById('btn-'+type).classList.add('active'); applyFilter(); }
-function applyFilter() { const cards = document.querySelectorAll('.stock-card'); cards.forEach(card => { const cat = card.getAttribute('data-cat'); let show = false; if (activeFilter === 'ALL') show = true; else if (activeFilter === 'TODAY') { if (currentWinner === 'ALL' || cat === currentWinner) show = true; } if(show) card.classList.remove('hidden'); else card.classList.add('hidden'); }); }
-function fetchData() { fetch('/data').then(response => response.json()).then(data => { document.getElementById('status-disp').innerText = data.status; const ans1 = document.getElementById('ans1-disp'); ans1.innerHTML = data.ans1; ans1.className = "metric-value " + (data.ans1.includes("POSITIVE") ? "txt-green" : (data.ans1.includes("NEGATIVE") ? "txt-red" : "loading")); document.getElementById('ans2-disp').innerText = data.ans2; currentWinner = data.winner; data.stocks.forEach(s => { const el = document.getElementById('price-' + s.name); if(el) { el.innerText = "₹" + s.price; el.style.color = (s.price !== "0.00" && s.price !== "ERR") ? "#00e396" : "#ffffff"; } }); applyFilter(); }); }
+
+function filterStocks(type) {
+    activeFilter = type;
+    document.querySelectorAll('.chip').forEach(b => b.classList.remove('active'));
+    document.getElementById('btn-'+type).classList.add('active');
+    applyFilter();
+}
+
+function applyFilter() {
+    const cards = document.querySelectorAll('.stock-card');
+    cards.forEach(card => {
+        const cat = card.getAttribute('data-cat');
+        let show = false;
+        if (activeFilter === 'ALL') show = true;
+        else if (activeFilter === 'TODAY') {
+            if (currentWinner === 'ALL' || cat === currentWinner) show = true;
+        }
+        if(show) card.classList.remove('hidden'); else card.classList.add('hidden');
+    });
+}
+
+function fetchData() {
+    fetch('/data')
+    .then(response => response.json())
+    .then(data => {
+        document.getElementById('status-disp').innerText = data.status;
+        
+        const ans1 = document.getElementById('ans1-disp');
+        ans1.innerHTML = data.ans1;
+        if(data.ans1.includes("POSITIVE")) ans1.className = "metric-value txt-green";
+        else if(data.ans1.includes("NEGATIVE")) ans1.className = "metric-value txt-red";
+        else ans1.className = "metric-value loading";
+
+        document.getElementById('ans2-disp').innerText = data.ans2;
+        currentWinner = data.winner;
+        
+        data.stocks.forEach(s => {
+            const el = document.getElementById('price-' + s.name);
+            if(el) {
+                el.innerText = "₹" + s.price;
+                // Simple color logic based on price (optional)
+                el.style.color = (s.price !== "0.00" && s.price !== "ERR") ? "#00e396" : "#ffffff";
+            }
+        });
+        applyFilter();
+    });
+}
 setInterval(fetchData, 1500);
 </script>
 </head>
 <body>
-<div class="header"> <div class="brand">AI TRADER PRO</div> <div class="status-badge" id="status-disp">CONNECTING...</div> </div>
-<div class="dashboard">
-    <div class="metric-panel"> <div class="metric-label">MARKET TREND</div> <div class="metric-value" id="ans1-disp">WAIT...</div> </div>
-    <div class="metric-panel" style="border-right: none;"> <div class="metric-label">STRONGEST SECTOR</div> <div class="metric-value" style="color: var(--accent-blue);" id="ans2-disp">LOADING...</div> </div>
-    <div class="side-panel"> <div class="panel-head">🔥 HOT PICKS</div> <div class="pick-list"> {% for s in stocks %} <div class="pick-item">{{ s.name }}</div> {% endfor %} </div> </div>
+
+<div class="header">
+    <div class="brand">AI TRADER PRO</div>
+    <div class="status-badge" id="status-disp">CONNECTING...</div>
 </div>
-<div class="filter-bar"> <div id="btn-ALL" class="chip active" onclick="filterStocks('ALL')">ALL STOCKS</div> <div id="btn-TODAY" class="chip" onclick="filterStocks('TODAY')">🚀 AI PICK</div> </div>
-<div class="market-list"> {% for s in stocks %} <div class="stock-card" id="card-{{ s.name }}" data-cat="{{ s.cat }}"> <div class="st-info"> <span class="st-name">{{ s.name }}</span> <span class="st-cat">{{ s.cat }}</span> </div> <div class="st-price" id="price-{{ s.name }}">₹{{ s.price }}</div> </div> {% endfor %} </div>
+
+<div class="dashboard">
+    <div class="metric-panel">
+        <div class="metric-label">MARKET TREND</div>
+        <div class="metric-value" id="ans1-disp">WAIT...</div>
+    </div>
+    <div class="metric-panel" style="border-right: none;">
+        <div class="metric-label">STRONGEST SECTOR</div>
+        <div class="metric-value" style="color: var(--accent-blue);" id="ans2-disp">LOADING...</div>
+    </div>
+    <div class="side-panel">
+        <div class="panel-head">🔥 HOT PICKS</div>
+        <div class="pick-list">
+            {% for s in stocks %}
+            <div class="pick-item">{{ s.name }}</div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+
+<div class="filter-bar">
+    <div id="btn-ALL" class="chip active" onclick="filterStocks('ALL')">ALL STOCKS</div>
+    <div id="btn-TODAY" class="chip" onclick="filterStocks('TODAY')">🚀 AI PICK</div>
+</div>
+
+<div class="market-list">
+    {% for s in stocks %}
+    <div class="stock-card" id="card-{{ s.name }}" data-cat="{{ s.cat }}">
+        <div class="st-info">
+            <span class="st-name">{{ s.name }}</span>
+            <span class="st-cat">{{ s.cat }}</span>
+        </div>
+        <div class="st-price" id="price-{{ s.name }}">₹{{ s.price }}</div>
+    </div>
+    {% endfor %}
+</div>
+
 </body>
-</html>'''
+</html>
+'''
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
