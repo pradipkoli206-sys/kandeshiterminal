@@ -2,7 +2,7 @@ import os
 import pyotp
 import time
 import threading
-import requests # 1. हे नवीन ऍड केले आहे (वेबसाईट झोपू नये म्हणून)
+import requests
 from datetime import datetime, timedelta, timezone
 from flask import Flask, render_template_string, jsonify
 from SmartApi import SmartConnect
@@ -14,7 +14,7 @@ API_KEY = os.environ.get("API_KEY")
 CLIENT_ID = os.environ.get("CLIENT_ID")
 PASSWORD = os.environ.get("PASSWORD")
 TOTP_KEY = os.environ.get("TOTP_KEY")
-RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL") # 2. रेंडरची लिंक घेण्यासाठी
+RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL")
 
 live_data = {} 
 market_status = "CHECKING..."
@@ -24,7 +24,7 @@ winning_sector_code = "ALL"
 data_fetched_once = False
 tokens_loaded = False 
 
-# --- 2. STOCK CONFIGURATION (UNTOUCHED) ---
+# --- 2. STOCK CONFIGURATION ---
 TARGET_STOCKS = [
     {"name": "SOUTHBANK", "cat": "BANK"},
     {"name": "CENTRALBK", "cat": "BANK"},
@@ -43,9 +43,10 @@ INDICES_LIST = [
     {"name": "NIFTY_AUTO", "token": "99926002", "symbol": "Nifty Auto"}
 ]
 
-STOCKS = []
+# *** FIX: सुरुवातीलाच लिस्ट भरा म्हणजे स्क्रीन रिकामी दिसणार नाही ***
+STOCKS = [{"name": s["name"], "cat": s["cat"], "token": None, "price": "WAIT...", "symbol": s["name"]} for s in TARGET_STOCKS]
 
-# --- 3. AUTO-SCANNER (UNTOUCHED - SAFE MODE) ---
+# --- 3. AUTO-SCANNER ---
 def fetch_correct_tokens(smart_api):
     global STOCKS
     print("\n>>> STARTING NSE TOKEN SCANNER (SAFE MODE) <<<")
@@ -83,31 +84,29 @@ def fetch_correct_tokens(smart_api):
                 temp_stocks.append({"name": name, "token": None, "cat": cat, "price": "ERR"})
         except:
             temp_stocks.append({"name": name, "token": None, "cat": cat, "price": "ERR"})
+    
+    # अपडेट झाल्यावर जुन्या लिस्टला नवीन डेटाने बदला
     STOCKS = temp_stocks
     print(">>> SCAN COMPLETE <<<\n")
 
-# --- 4. ENGINE (MARKET TIME + KEEP ALIVE ADDED) ---
+# --- 4. ENGINE ---
 def start_engine():
     global live_data, market_status, ans1_nifty, ans2_sector, winning_sector_code, data_fetched_once, tokens_loaded
     smart_api = None
-    last_ping_time = time.time() # 3. हे टाइमर आहे (वेबसाईट चालू ठेवण्यासाठी)
+    last_ping_time = time.time()
 
     while True:
         try:
-            # --- 4. MARKET TIME CHECK ---
             utc_now = datetime.now(timezone.utc)
             ist_now = utc_now + timedelta(hours=5, minutes=30)
             current_time = ist_now.time()
-            is_weekday = ist_now.weekday() < 5 # सोमवार ते शुक्रवार
+            is_weekday = ist_now.weekday() < 5
             
-            # मार्केट वेळ: सकाळी 09:00 ते दुपारी 03:35
             market_open = datetime.strptime("09:00", "%H:%M").time()
             market_close = datetime.strptime("15:35", "%H:%M").time()
             
             is_market_active = is_weekday and (market_open <= current_time <= market_close)
 
-            # --- 5. KEEP ALIVE LOGIC (PING) ---
-            # दर १० मिनिटांनी (६०० सेकंद) वेबसाईटला स्वतः पिंग करा
             if time.time() - last_ping_time > 600:
                 if RENDER_URL:
                     try:
@@ -117,15 +116,13 @@ def start_engine():
                         pass
                 last_ping_time = time.time()
 
-            # जर मार्केट बंद असेल, तर डेटा फेच करू नका (फक्त झोपा)
             if not is_market_active:
                 market_status = "CLOSED"
-                time.sleep(60) # १ मिनिट थांबा
+                time.sleep(60)
                 continue 
 
             market_status = "LIVE"
 
-            # --- 6. ORIGINAL LOGIC (UNTOUCHED) ---
             if smart_api is None:
                 totp = pyotp.TOTP(TOTP_KEY).now()
                 smart_api = SmartConnect(api_key=API_KEY)
@@ -151,7 +148,7 @@ def start_engine():
                 time.sleep(0.3)
 
             for stock in STOCKS:
-                if stock["token"]:
+                if stock.get("token"):
                     try:
                         res = smart_api.ltpData("NSE", stock["symbol"], stock["token"])
                         if res and res['status']:
@@ -178,157 +175,190 @@ t = threading.Thread(target=start_engine); t.daemon = True; t.start()
 # --- 5. ROUTES ---
 @app.route('/')
 def index():
+    # डेटा अपडेट करा
     for s in STOCKS:
-        if s["token"]: s["price"] = live_data.get(s["token"], "0.00")
+        if s.get("token"): s["price"] = live_data.get(s["token"], "WAIT...")
     return render_template_string(HTML_TEMPLATE, status=market_status, ans1=ans1_nifty, ans2=ans2_sector, stocks=STOCKS)
 
 @app.route('/data')
 def data():
     for s in STOCKS:
-        if s["token"]: s["price"] = live_data.get(s["token"], "0.00")
+        if s.get("token"): s["price"] = live_data.get(s["token"], "WAIT...")
     return jsonify({"status": market_status, "ans1": ans1_nifty, "ans2": ans2_sector, "winner": winning_sector_code, "stocks": STOCKS})
 
-# --- 6. NEW PREMIUM DESIGN (UPDATED FOR CLARITY) ---
-# फक्त या खालील HTML भागात बदल केला आहे, बाकी कोड तसाच आहे.
+# --- 6. WHATSAPP STYLE TEMPLATE (EXACT REPLICA) ---
 HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AI TRADER PRO</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+<title>WhatsApp Stocks</title>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 <style>
-/* --- CLEAN & CLEAR THEME --- */
+/* --- WHATSAPP DARK THEME --- */
 :root {
-    --bg-main: #121212; /* More neutral dark background */
-    --bg-card: #1E1E1E; /* Slightly lighter card background for contrast */
-    --text-main: #ffffff;
-    --text-muted: #A0A0A0; /* Lighter gray for better readability */
-    --border: #333333; /* Subtler borders */
-    --accent-blue: #4dabff; /* Brighter blue */
-    --accent-green: #00e676; /* Brighter green */
-    --accent-red: #ff5252; /* Brighter red */
-    --card-shadow: 0 4px 12px rgba(0,0,0,0.3); /* Deep shadow for pop-out effect */
+    --wa-bg: #0b141a;
+    --wa-header: #1f2c34;
+    --wa-item-hover: #101d25;
+    --wa-text-primary: #e9edef;
+    --wa-text-secondary: #8696a0;
+    --wa-accent: #00a884; 
+    --wa-check-blue: #53bdeb;
+    --wa-divider: #202c33;
+    --wa-fab: #00a884;
+    --wa-bottom-bar: #1f2c34;
 }
+
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 body { 
-    background-color: var(--bg-main); 
-    color: var(--text-main); 
-    font-family: 'Inter', sans-serif; 
-    margin: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+    background-color: var(--wa-bg); 
+    color: var(--wa-text-primary); 
+    font-family: 'Roboto', sans-serif; 
+    margin: 0; height: 100vh; display: flex; flex-direction: column; 
+    overflow: hidden;
 }
 
-/* HEADER - Cleaner */
-.header {
-    padding: 18px 24px; 
-    background: rgba(18, 18, 18, 0.9); 
-    border-bottom: 1px solid var(--border);
-    display: flex; justify-content: space-between; align-items: center;
-    backdrop-filter: blur(10px);
-    box-shadow: 0 1px 5px rgba(0,0,0,0.2);
+/* HEADER */
+.wa-header {
+    background-color: var(--wa-header);
+    padding: 10px 16px;
+    display: flex; flex-direction: column; gap: 15px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    z-index: 10;
 }
-.brand { font-size: 20px; font-weight: 800; letter-spacing: 0.5px; background: linear-gradient(90deg, #4dabff, #b388ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-.status-badge { font-size: 12px; font-weight: 700; padding: 5px 10px; border-radius: 20px; background: rgba(255,255,255,0.1); color: var(--text-main); border: 1px solid var(--border); letter-spacing: 0.5px;}
+.top-bar { display: flex; justify-content: space-between; align-items: center; }
+.logo { font-size: 22px; font-weight: 500; color: var(--wa-text-secondary); }
+.header-icons { display: flex; gap: 20px; color: var(--wa-text-secondary); }
+.material-icons { font-size: 24px; cursor: pointer; }
 
-/* TOP METRICS - More breathing room */
-.dashboard { display: flex; border-bottom: 1px solid var(--border); height: 32%; min-height: 180px; background: rgba(255,255,255,0.02);}
-.metric-panel { flex: 1; padding: 25px; display: flex; flex-direction: column; justify-content: center; border-right: 1px solid var(--border); }
-.metric-label { color: var(--text-muted); font-size: 12px; font-weight: 700; letter-spacing: 1.2px; margin-bottom: 10px; text-transform: uppercase; opacity: 0.8; }
-.metric-value { font-size: 26px; font-weight: 800; line-height: 1.1; }
-.txt-green { color: var(--accent-green); text-shadow: 0 0 10px rgba(0, 230, 118, 0.3); }
-.txt-red { color: var(--accent-red); text-shadow: 0 0 10px rgba(255, 82, 82, 0.3); }
-
-/* SIDE PANEL - Cleaner list */
-.side-panel { width: 32%; background: rgba(30, 30, 30, 0.5); border-left: 1px solid var(--border); display: flex; flex-direction: column; }
-.panel-head { padding: 15px; font-size: 12px; font-weight: 700; color: var(--accent-blue); text-align: center; border-bottom: 1px solid var(--border); background: rgba(0,0,0,0.2); letter-spacing: 1px; text-transform: uppercase;}
-.pick-list { overflow-y: auto; flex: 1; padding: 5px 0;}
-.pick-item { padding: 12px 20px; font-size: 13px; font-weight: 600; border-bottom: 1px solid var(--border); color: var(--text-main); display: flex; align-items: center; }
-.pick-item::before { content: '•'; color: var(--accent-green); margin-right: 8px; font-size: 18px; line-height: 0;}
-
-/* FILTERS - More distinct buttons */
-.filter-bar { padding: 15px 20px; display: flex; gap: 12px; background: var(--bg-main); }
-.chip { flex: 1; background: rgba(255,255,255,0.05); border: 1px solid var(--border); color: var(--text-muted); padding: 12px; border-radius: 10px; font-size: 12px; font-weight: 700; text-align: center; cursor: pointer; transition: all 0.3s ease; letter-spacing: 0.5px;}
-.chip.active { background: var(--accent-blue); color: white; border-color: var(--accent-blue); box-shadow: 0 4px 15px rgba(77, 171, 255, 0.4); transform: translateY(-1px);}
-
-/* STOCK LIST & CLEAR CARDS */
-.market-list { flex: 1; overflow-y: auto; padding: 20px; background: var(--bg-main); }
-.stock-card { 
-    background: var(--bg-card); 
-    border: 1px solid var(--border); 
-    padding: 20px 24px; /* More padding for clarity */
-    border-radius: 16px; /* Softer corners */
-    margin-bottom: 16px; 
-    display: flex; justify-content: space-between; align-items: center;
-    box-shadow: var(--card-shadow); /* Deptha and pop */
-    transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
+/* FILTER CHIPS (Like Top Tabs) */
+.filter-row { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 5px; }
+.chip {
+    background: #2a3942; color: var(--wa-text-secondary);
+    padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 500;
+    white-space: nowrap; cursor: pointer; border: 1px solid transparent;
 }
-.stock-card:hover {
-    transform: translateY(-3px); /* Lift effect on hover */
-    box-shadow: 0 8px 20px rgba(0,0,0,0.4);
-    border-color: rgba(77, 171, 255, 0.3);
+.chip.active { background: #0a332c; color: #00a884; border-color: rgba(0,168,132,0.3); }
+
+/* CHAT LIST (STOCK LIST) */
+.chat-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
+.chat-item {
+    display: flex; align-items: center; padding: 12px 16px;
+    cursor: pointer; position: relative;
 }
-.st-info { display: flex; flex-direction: column; gap: 6px; }
-.st-name { font-size: 17px; font-weight: 800; color: var(--text-main); letter-spacing: 0.5px; }
-.st-cat { font-size: 11px; font-weight: 700; color: var(--text-muted); background: rgba(255,255,255,0.07); padding: 4px 8px; border-radius: 6px; width: fit-content; letter-spacing: 0.5px; }
-.st-price { font-size: 22px; font-weight: 800; color: var(--text-main); letter-spacing: 0.5px; text-align: right;}
-.hidden { display: none !important; }
+.chat-item:active { background: var(--wa-item-hover); }
 
-/* ANIMATION */
-@keyframes pulse { 0% { opacity: 0.5; } 50% { opacity: 1; } 100% { opacity: 0.5; } }
-.loading { animation: pulse 1.5s infinite; color: var(--text-muted); }
+/* AVATAR */
+.avatar {
+    width: 45px; height: 45px; border-radius: 50%;
+    background: #607d8b; display: flex; justify-content: center; align-items: center;
+    font-size: 18px; font-weight: 600; color: white; margin-right: 15px;
+    flex-shrink: 0;
+}
 
-/* Scrollbar Styling for a cleaner look */
-::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: var(--bg-main); }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; }
+/* CONTENT */
+.chat-info { flex: 1; display: flex; flex-direction: column; gap: 4px; overflow: hidden; }
+.row-top { display: flex; justify-content: space-between; align-items: baseline; }
+.stock-name { font-size: 17px; font-weight: 500; color: var(--wa-text-primary); }
+.current-price { 
+    color: var(--wa-accent); font-weight: 500; font-size: 13px; 
+}
+/* Making price look like the time in WhatsApp */
+
+.row-bottom { display: flex; justify-content: space-between; align-items: center; }
+.last-msg { 
+    font-size: 14px; color: var(--wa-text-secondary); 
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; 
+    display: flex; align-items: center; gap: 4px;
+}
+.badge {
+    background: var(--wa-accent); color: #0b141a;
+    font-size: 10px; font-weight: 700; padding: 3px 6px; border-radius: 10px;
+    min-width: 18px; text-align: center; display: inline-block;
+}
+.hidden-badge { display: none; }
+
+/* FLOATING BUTTON */
+.fab {
+    position: fixed; bottom: 85px; right: 20px;
+    width: 50px; height: 50px; border-radius: 14px;
+    background: var(--wa-fab); color: #0b141a;
+    display: flex; justify-content: center; align-items: center;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.3); cursor: pointer;
+    z-index: 20;
+}
+
+/* BOTTOM NAVBAR */
+.bottom-nav {
+    height: 75px; background: var(--wa-bottom-bar);
+    border-top: 1px solid #2a3942;
+    display: flex; justify-content: space-around; align-items: center;
+    padding-bottom: 12px;
+}
+.nav-item {
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    color: var(--wa-text-secondary); cursor: pointer; flex: 1;
+}
+.nav-item.active { color: var(--wa-text-primary); }
+.nav-item.active .pill-indicator {
+    background: rgba(0, 168, 132, 0.2); 
+    padding: 4px 20px; border-radius: 16px;
+}
+.nav-icon { font-size: 24px; margin-bottom: 0; }
+.nav-label { font-size: 12px; font-weight: 500; }
+.nav-item.active .nav-icon { color: var(--wa-text-primary); }
+
+/* Animation */
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+.animate-price { animation: fadeIn 0.5s ease-in-out; }
+
 </style>
 <script>
-let currentWinner = "ALL";
-let activeFilter = "ALL";
+let currentFilter = 'ALL';
 
 function filterStocks(type) {
-    activeFilter = type;
-    document.querySelectorAll('.chip').forEach(b => b.classList.remove('active'));
-    document.getElementById('btn-'+type).classList.add('active');
-    applyFilter();
+    currentFilter = type;
+    document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+    document.getElementById('chip-'+type).classList.add('active');
+    
+    document.querySelectorAll('.chat-item').forEach(item => {
+        const cat = item.getAttribute('data-cat');
+        if (type === 'ALL' || cat === type) item.style.display = 'flex';
+        else item.style.display = 'none';
+    });
 }
 
-function applyFilter() {
-    const cards = document.querySelectorAll('.stock-card');
-    cards.forEach(card => {
-        const cat = card.getAttribute('data-cat');
-        let show = false;
-        if (activeFilter === 'ALL') show = true;
-        else if (activeFilter === 'TODAY') {
-            if (currentWinner === 'ALL' || cat === currentWinner) show = true;
-        }
-        if(show) card.classList.remove('hidden'); else card.classList.add('hidden');
-    });
+function setActiveNav(el) {
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    el.classList.add('active');
 }
 
 function fetchData() {
     fetch('/data')
     .then(response => response.json())
     .then(data => {
-        document.getElementById('status-disp').innerText = data.status;
-        
-        const ans1 = document.getElementById('ans1-disp');
-        ans1.innerHTML = data.ans1;
-        if(data.ans1.includes("POSITIVE")) ans1.className = "metric-value txt-green";
-        else if(data.ans1.includes("NEGATIVE")) ans1.className = "metric-value txt-red";
-        else ans1.className = "metric-value loading";
-
-        document.getElementById('ans2-disp').innerText = data.ans2;
-        currentWinner = data.winner;
-        
         data.stocks.forEach(s => {
-            const el = document.getElementById('price-' + s.name);
-            if(el) {
-                el.innerText = "₹" + s.price;
-                // Simple color logic based on price (optional)
-                el.style.color = (s.price !== "0.00" && s.price !== "ERR") ? "#00e676" : "#ffffff";
+            const priceEl = document.getElementById('price-' + s.name);
+            const badgeEl = document.getElementById('badge-' + s.name);
+            
+            if(priceEl) {
+                // Formatting price
+                const displayPrice = (s.price === "WAIT..." || s.price === "0.00") ? s.price : "₹" + s.price;
+                priceEl.innerText = displayPrice;
+                
+                // Animate only if price changed (simple check)
+                priceEl.classList.remove('animate-price');
+                void priceEl.offsetWidth; 
+                priceEl.classList.add('animate-price');
+            }
+            
+            // Show badge if price is live
+            if(badgeEl) {
+                if(s.price !== "0.00" && s.price !== "WAIT..." && s.price !== "ERR") {
+                    badgeEl.classList.remove('hidden-badge');
+                }
             }
         });
-        applyFilter();
     });
 }
 setInterval(fetchData, 2000);
@@ -336,45 +366,73 @@ setInterval(fetchData, 2000);
 </head>
 <body>
 
-<div class="header">
-    <div class="brand">AI TRADER PRO</div>
-    <div class="status-badge" id="status-disp">CONNECTING...</div>
-</div>
-
-<div class="dashboard">
-    <div class="metric-panel">
-        <div class="metric-label">MARKET TREND</div>
-        <div class="metric-value" id="ans1-disp">WAIT...</div>
-    </div>
-    <div class="metric-panel" style="border-right: none;">
-        <div class="metric-label">STRONGEST SECTOR</div>
-        <div class="metric-value" style="color: var(--accent-blue); text-shadow: 0 0 10px rgba(77, 171, 255, 0.3);" id="ans2-disp">LOADING...</div>
-    </div>
-    <div class="side-panel">
-        <div class="panel-head">🔥 HOT PICKS</div>
-        <div class="pick-list">
-            {% for s in stocks %}
-            <div class="pick-item">{{ s.name }}</div>
-            {% endfor %}
+<div class="wa-header">
+    <div class="top-bar">
+        <div class="logo">WhatsApp</div>
+        <div class="header-icons">
+            <span class="material-icons">camera_alt</span>
+            <span class="material-icons">search</span>
+            <span class="material-icons">more_vert</span>
         </div>
     </div>
+    
+    <div class="filter-row">
+        <div id="chip-ALL" class="chip active" onclick="filterStocks('ALL')">All</div>
+        <div id="chip-BANK" class="chip" onclick="filterStocks('BANK')">Banking</div>
+        <div id="chip-IT" class="chip" onclick="filterStocks('IT')">IT Sector</div>
+        <div id="chip-AUTO" class="chip" onclick="filterStocks('AUTO')">Auto</div>
+    </div>
 </div>
 
-<div class="filter-bar">
-    <div id="btn-ALL" class="chip active" onclick="filterStocks('ALL')">ALL STOCKS</div>
-    <div id="btn-TODAY" class="chip" onclick="filterStocks('TODAY')">🚀 AI PICK</div>
-</div>
-
-<div class="market-list">
+<div class="chat-list">
     {% for s in stocks %}
-    <div class="stock-card" id="card-{{ s.name }}" data-cat="{{ s.cat }}">
-        <div class="st-info">
-            <span class="st-name">{{ s.name }}</span>
-            <span class="st-cat">{{ s.cat }}</span>
+    <div class="chat-item" data-cat="{{ s.cat }}">
+        <div class="avatar" style="background: {% if s.cat=='BANK' %}#00a884{% elif s.cat=='IT' %}#34b7f1{% else %}#607d8b{% endif %};">
+            {{ s.name[0] }}
         </div>
-        <div class="st-price" id="price-{{ s.name }}">₹{{ s.price }}</div>
+        
+        <div class="chat-info">
+            <div class="row-top">
+                <span class="stock-name">{{ s.name }}</span>
+                <span class="current-price" id="price-{{ s.name }}">{{ s.price }}</span>
+            </div>
+            <div class="row-bottom">
+                <div class="last-msg">
+                    <span class="material-icons" style="font-size:14px; color:#53bdeb;">done_all</span>
+                    {{ s.cat }} Sector Update
+                </div>
+                <div class="badge hidden-badge" id="badge-{{ s.name }}">1</div>
+            </div>
+        </div>
     </div>
+    <div style="height:1px; background:#202c33; margin-left:75px;"></div>
     {% endfor %}
+</div>
+
+<div class="fab">
+    <span class="material-icons" style="font-size:24px; color:#0b141a;">add_comment</span>
+</div>
+
+<div class="bottom-nav">
+    <div class="nav-item active" onclick="setActiveNav(this)">
+        <div class="pill-indicator"><span class="material-icons nav-icon">chat</span></div>
+        <span class="nav-label">All Stocks</span>
+    </div>
+    
+    <div class="nav-item" onclick="setActiveNav(this)">
+        <div class="pill-indicator"><span class="material-icons nav-icon">donut_large</span></div>
+        <span class="nav-label">Today Stock</span>
+    </div>
+    
+    <div class="nav-item" onclick="setActiveNav(this)">
+        <div class="pill-indicator"><span class="material-icons nav-icon">groups</span></div>
+        <span class="nav-label">Signal</span>
+    </div>
+    
+    <div class="nav-item" onclick="setActiveNav(this)">
+        <div class="pill-indicator"><span class="material-icons nav-icon">call</span></div>
+        <span class="nav-label">Prev Day</span>
+    </div>
 </div>
 
 </body>
