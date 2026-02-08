@@ -188,24 +188,26 @@ def data():
         if s["token"]: s["price"] = live_data.get(s["token"], "0.00")
     return jsonify({"status": market_status, "ans1": ans1_nifty, "ans2": ans2_sector, "winner": winning_sector_code, "stocks": STOCKS})
 
-# --- 6. NEW PREMIUM DESIGN (HTML/CSS) ---
+# --- 6. NEW PREMIUM DESIGN (UPDATED FOR CLARITY) ---
+# फक्त या खालील HTML भागात बदल केला आहे, बाकी कोड तसाच आहे.
 HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AI TRADER PRO</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
-/* --- PREMIUM THEME --- */
+/* --- CLEAN & CLEAR THEME --- */
 :root {
-    --bg-main: #0a0e17;
-    --bg-card: #151a25;
+    --bg-main: #121212; /* More neutral dark background */
+    --bg-card: #1E1E1E; /* Slightly lighter card background for contrast */
     --text-main: #ffffff;
-    --text-muted: #8b9bb4;
-    --border: #2a3441;
-    --accent-blue: #3772ff;
-    --accent-green: #00e396;
-    --accent-red: #ff4560;
+    --text-muted: #A0A0A0; /* Lighter gray for better readability */
+    --border: #333333; /* Subtler borders */
+    --accent-blue: #4dabff; /* Brighter blue */
+    --accent-green: #00e676; /* Brighter green */
+    --accent-red: #ff5252; /* Brighter red */
+    --card-shadow: 0 4px 12px rgba(0,0,0,0.3); /* Deep shadow for pop-out effect */
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 body { 
@@ -215,56 +217,69 @@ body {
     margin: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden;
 }
 
-/* HEADER */
+/* HEADER - Cleaner */
 .header {
-    padding: 15px 20px; 
-    background: rgba(21, 26, 37, 0.95); 
+    padding: 18px 24px; 
+    background: rgba(18, 18, 18, 0.9); 
     border-bottom: 1px solid var(--border);
     display: flex; justify-content: space-between; align-items: center;
     backdrop-filter: blur(10px);
+    box-shadow: 0 1px 5px rgba(0,0,0,0.2);
 }
-.brand { font-size: 18px; font-weight: 800; letter-spacing: 0.5px; background: linear-gradient(45deg, #3772ff, #9b5de5); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-.status-badge { font-size: 11px; font-weight: 600; padding: 4px 8px; border-radius: 4px; background: #1c222e; color: var(--text-muted); border: 1px solid var(--border); }
+.brand { font-size: 20px; font-weight: 800; letter-spacing: 0.5px; background: linear-gradient(90deg, #4dabff, #b388ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.status-badge { font-size: 12px; font-weight: 700; padding: 5px 10px; border-radius: 20px; background: rgba(255,255,255,0.1); color: var(--text-main); border: 1px solid var(--border); letter-spacing: 0.5px;}
 
-/* TOP METRICS */
-.dashboard { display: flex; border-bottom: 1px solid var(--border); height: 35%; }
-.metric-panel { flex: 1; padding: 20px; display: flex; flex-direction: column; justify-content: center; border-right: 1px solid var(--border); }
-.metric-label { color: var(--text-muted); font-size: 11px; font-weight: 600; letter-spacing: 1px; margin-bottom: 8px; text-transform: uppercase; }
-.metric-value { font-size: 22px; font-weight: 700; line-height: 1.2; }
-.txt-green { color: var(--accent-green); }
-.txt-red { color: var(--accent-red); }
+/* TOP METRICS - More breathing room */
+.dashboard { display: flex; border-bottom: 1px solid var(--border); height: 32%; min-height: 180px; background: rgba(255,255,255,0.02);}
+.metric-panel { flex: 1; padding: 25px; display: flex; flex-direction: column; justify-content: center; border-right: 1px solid var(--border); }
+.metric-label { color: var(--text-muted); font-size: 12px; font-weight: 700; letter-spacing: 1.2px; margin-bottom: 10px; text-transform: uppercase; opacity: 0.8; }
+.metric-value { font-size: 26px; font-weight: 800; line-height: 1.1; }
+.txt-green { color: var(--accent-green); text-shadow: 0 0 10px rgba(0, 230, 118, 0.3); }
+.txt-red { color: var(--accent-red); text-shadow: 0 0 10px rgba(255, 82, 82, 0.3); }
 
-/* SIDE PANEL (TODAY'S PICK) */
-.side-panel { width: 35%; background: #11151e; border-left: 1px solid var(--border); display: flex; flex-direction: column; }
-.panel-head { padding: 12px; font-size: 11px; font-weight: 700; color: var(--accent-blue); text-align: center; border-bottom: 1px solid var(--border); background: #161b26; letter-spacing: 0.5px; }
-.pick-list { overflow-y: auto; flex: 1; }
-.pick-item { padding: 10px 15px; font-size: 12px; font-weight: 500; border-bottom: 1px solid #1e2532; color: #cbd5e1; }
+/* SIDE PANEL - Cleaner list */
+.side-panel { width: 32%; background: rgba(30, 30, 30, 0.5); border-left: 1px solid var(--border); display: flex; flex-direction: column; }
+.panel-head { padding: 15px; font-size: 12px; font-weight: 700; color: var(--accent-blue); text-align: center; border-bottom: 1px solid var(--border); background: rgba(0,0,0,0.2); letter-spacing: 1px; text-transform: uppercase;}
+.pick-list { overflow-y: auto; flex: 1; padding: 5px 0;}
+.pick-item { padding: 12px 20px; font-size: 13px; font-weight: 600; border-bottom: 1px solid var(--border); color: var(--text-main); display: flex; align-items: center; }
+.pick-item::before { content: '•'; color: var(--accent-green); margin-right: 8px; font-size: 18px; line-height: 0;}
 
-/* FILTERS */
-.filter-bar { padding: 12px 15px; display: flex; gap: 10px; background: var(--bg-main); border-bottom: 1px solid var(--border); }
-.chip { flex: 1; background: var(--bg-card); border: 1px solid var(--border); color: var(--text-muted); padding: 10px; border-radius: 8px; font-size: 11px; font-weight: 600; text-align: center; cursor: pointer; transition: all 0.2s; }
-.chip.active { background: var(--accent-blue); color: white; border-color: var(--accent-blue); box-shadow: 0 4px 12px rgba(55, 114, 255, 0.3); }
+/* FILTERS - More distinct buttons */
+.filter-bar { padding: 15px 20px; display: flex; gap: 12px; background: var(--bg-main); }
+.chip { flex: 1; background: rgba(255,255,255,0.05); border: 1px solid var(--border); color: var(--text-muted); padding: 12px; border-radius: 10px; font-size: 12px; font-weight: 700; text-align: center; cursor: pointer; transition: all 0.3s ease; letter-spacing: 0.5px;}
+.chip.active { background: var(--accent-blue); color: white; border-color: var(--accent-blue); box-shadow: 0 4px 15px rgba(77, 171, 255, 0.4); transform: translateY(-1px);}
 
-/* STOCK LIST */
-.market-list { flex: 1; overflow-y: auto; padding: 15px; }
+/* STOCK LIST & CLEAR CARDS */
+.market-list { flex: 1; overflow-y: auto; padding: 20px; background: var(--bg-main); }
 .stock-card { 
     background: var(--bg-card); 
     border: 1px solid var(--border); 
-    padding: 16px; 
-    border-radius: 12px; 
-    margin-bottom: 12px; 
+    padding: 20px 24px; /* More padding for clarity */
+    border-radius: 16px; /* Softer corners */
+    margin-bottom: 16px; 
     display: flex; justify-content: space-between; align-items: center;
-    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    box-shadow: var(--card-shadow); /* Deptha and pop */
+    transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
 }
-.st-info { display: flex; flex-direction: column; }
-.st-name { font-size: 14px; font-weight: 700; color: var(--text-main); margin-bottom: 4px; }
-.st-cat { font-size: 10px; font-weight: 600; color: var(--text-muted); background: #1e2532; padding: 3px 6px; border-radius: 4px; width: fit-content; }
-.st-price { font-size: 16px; font-weight: 700; color: var(--text-main); letter-spacing: 0.5px; }
+.stock-card:hover {
+    transform: translateY(-3px); /* Lift effect on hover */
+    box-shadow: 0 8px 20px rgba(0,0,0,0.4);
+    border-color: rgba(77, 171, 255, 0.3);
+}
+.st-info { display: flex; flex-direction: column; gap: 6px; }
+.st-name { font-size: 17px; font-weight: 800; color: var(--text-main); letter-spacing: 0.5px; }
+.st-cat { font-size: 11px; font-weight: 700; color: var(--text-muted); background: rgba(255,255,255,0.07); padding: 4px 8px; border-radius: 6px; width: fit-content; letter-spacing: 0.5px; }
+.st-price { font-size: 22px; font-weight: 800; color: var(--text-main); letter-spacing: 0.5px; text-align: right;}
 .hidden { display: none !important; }
 
 /* ANIMATION */
-@keyframes pulse { 0% { opacity: 0.6; } 50% { opacity: 1; } 100% { opacity: 0.6; } }
-.loading { animation: pulse 1.5s infinite; }
+@keyframes pulse { 0% { opacity: 0.5; } 50% { opacity: 1; } 100% { opacity: 0.5; } }
+.loading { animation: pulse 1.5s infinite; color: var(--text-muted); }
+
+/* Scrollbar Styling for a cleaner look */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-main); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; }
 </style>
 <script>
 let currentWinner = "ALL";
@@ -310,7 +325,7 @@ function fetchData() {
             if(el) {
                 el.innerText = "₹" + s.price;
                 // Simple color logic based on price (optional)
-                el.style.color = (s.price !== "0.00" && s.price !== "ERR") ? "#00e396" : "#ffffff";
+                el.style.color = (s.price !== "0.00" && s.price !== "ERR") ? "#00e676" : "#ffffff";
             }
         });
         applyFilter();
@@ -333,7 +348,7 @@ setInterval(fetchData, 2000);
     </div>
     <div class="metric-panel" style="border-right: none;">
         <div class="metric-label">STRONGEST SECTOR</div>
-        <div class="metric-value" style="color: var(--accent-blue);" id="ans2-disp">LOADING...</div>
+        <div class="metric-value" style="color: var(--accent-blue); text-shadow: 0 0 10px rgba(77, 171, 255, 0.3);" id="ans2-disp">LOADING...</div>
     </div>
     <div class="side-panel">
         <div class="panel-head">🔥 HOT PICKS</div>
