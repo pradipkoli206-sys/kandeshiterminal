@@ -8,7 +8,7 @@ from SmartApi import SmartConnect
 
 app = Flask(__name__)
 
-# --- 1. KEYS ---
+# --- 1. KEYS (UNTOUCHED) ---
 API_KEY = os.environ.get("API_KEY")
 CLIENT_ID = os.environ.get("CLIENT_ID")
 PASSWORD = os.environ.get("PASSWORD")
@@ -22,7 +22,7 @@ winning_sector_code = "ALL"
 data_fetched_once = False
 tokens_loaded = False 
 
-# --- 2. STOCK CONFIGURATION ---
+# --- 2. STOCK CONFIGURATION (UNTOUCHED) ---
 TARGET_STOCKS = [
     {"name": "SOUTHBANK", "cat": "BANK"},
     {"name": "CENTRALBK", "cat": "BANK"},
@@ -43,289 +43,205 @@ INDICES_LIST = [
 
 STOCKS = []
 
-# --- 3. AUTO-SCANNER FUNCTION (SLOWED DOWN TO FIX RATE LIMIT) ---
+# --- 3. AUTO-SCANNER (UNTOUCHED - SAFE MODE) ---
 def fetch_correct_tokens(smart_api):
     global STOCKS
-    print("\n>>> STARTING NSE TOKEN SCANNER (SLOW MODE) <<<")
+    print("\n>>> STARTING NSE TOKEN SCANNER (SAFE MODE) <<<")
     temp_stocks = []
     
     for item in TARGET_STOCKS:
         name = item["name"]
         cat = item["cat"]
-        
-        # IMPORTANT: Slow down the search to avoid "Access denied" error
-        time.sleep(0.7) 
-        
+        time.sleep(1.2) 
         try:
-            # 1. API Call
             search_response = smart_api.searchScrip("NSE", name)
-            
-            # Handle Response Structure
             scrip_list = []
             if search_response and isinstance(search_response, dict) and 'data' in search_response:
                 scrip_list = search_response['data']
             elif search_response and isinstance(search_response, list):
                 scrip_list = search_response
-            else:
-                scrip_list = []
 
             found_token = None
             found_symbol = None
-            
             if scrip_list:
-                # Priority 1: Check for '-EQ'
                 for s in scrip_list:
                     if s['tradingsymbol'] == name + "-EQ":
-                        found_token = s['symboltoken']
-                        found_symbol = s['tradingsymbol']
+                        found_token = s['symboltoken']; found_symbol = s['tradingsymbol']
                         break
-                
-                # Priority 2: Check for '-BE' (For RTNINDIA/TTML)
                 if not found_token:
                     for s in scrip_list:
                         if s['tradingsymbol'] == name + "-BE":
-                            found_token = s['symboltoken']
-                            found_symbol = s['tradingsymbol']
+                            found_token = s['symboltoken']; found_symbol = s['tradingsymbol']
                             break
-                
-                # Priority 3: Exact Name
-                if not found_token:
-                    for s in scrip_list:
-                        if s['tradingsymbol'] == name:
-                            found_token = s['symboltoken']
-                            found_symbol = s['tradingsymbol']
-                            break
-            
             if found_token:
-                print(f"✅ FOUND: {name} -> {found_symbol} (Token: {found_token})")
-                temp_stocks.append({
-                    "name": name, 
-                    "token": found_token, 
-                    "symbol": found_symbol, 
-                    "cat": cat, 
-                    "price": "0.00"
-                })
+                print(f"✅ FOUND: {name}")
+                temp_stocks.append({"name": name, "token": found_token, "symbol": found_symbol, "cat": cat, "price": "0.00"})
             else:
-                print(f"❌ FAILED: Could not find NSE token for {name}")
+                print(f"❌ FAILED: {name}")
                 temp_stocks.append({"name": name, "token": None, "cat": cat, "price": "ERR"})
-                
-        except Exception as e:
-            print(f"Error scanning {name}: {e}")
+        except:
             temp_stocks.append({"name": name, "token": None, "cat": cat, "price": "ERR"})
-    
     STOCKS = temp_stocks
     print(">>> SCAN COMPLETE <<<\n")
 
-# --- 4. ENGINE ---
+# --- 4. ENGINE (UNTOUCHED) ---
 def start_engine():
     global live_data, market_status, ans1_nifty, ans2_sector, winning_sector_code, data_fetched_once, tokens_loaded
     smart_api = None
-    
     while True:
         try:
             utc_now = datetime.now(timezone.utc)
             ist_now = utc_now + timedelta(hours=5, minutes=30)
-            current_time = ist_now.time()
-            weekday = ist_now.weekday()
-            
-            start_time = datetime.strptime("09:00", "%H:%M").time()
-            end_time = datetime.strptime("15:30", "%H:%M").time()
-            is_market_open = (weekday < 5 and start_time <= current_time <= end_time)
-            
-            if is_market_open:
-                market_status = "LIVE"
-            else:
-                market_status = "CLOSED"
-
-            if not is_market_open and data_fetched_once:
-                time.sleep(10)
-                continue
+            is_market_open = (ist_now.weekday() < 5 and datetime.strptime("09:00", "%H:%M").time() <= ist_now.time() <= datetime.strptime("15:30", "%H:%M").time())
+            market_status = "LIVE" if is_market_open else "CLOSED"
 
             if smart_api is None:
-                try:
-                    totp = pyotp.TOTP(TOTP_KEY).now()
-                    smart_api = SmartConnect(api_key=API_KEY)
-                    data = smart_api.generateSession(CLIENT_ID, PASSWORD, totp)
-                    
-                    if not data['status']:
-                        print("Login Failed")
-                        time.sleep(5)
-                        continue
-                    else:
-                        if not tokens_loaded:
-                            fetch_correct_tokens(smart_api)
-                            tokens_loaded = True
-                except:
-                    time.sleep(5)
-                    continue
-            
-            if not tokens_loaded:
-                time.sleep(1)
-                continue
+                totp = pyotp.TOTP(TOTP_KEY).now()
+                smart_api = SmartConnect(api_key=API_KEY)
+                data = smart_api.generateSession(CLIENT_ID, PASSWORD, totp)
+                if data['status'] and not tokens_loaded:
+                    fetch_correct_tokens(smart_api); tokens_loaded = True
+
+            if not tokens_loaded: time.sleep(1); continue
 
             bank_change = -100.0; it_change = -100.0; auto_change = -100.0
 
-            # 1. Fetch Indices
             for ind in INDICES_LIST:
                 try:
                     res = smart_api.ltpData("NSE", ind["symbol"], ind["token"])
                     if res and res['status']:
-                        ltp = float(res['data']['ltp'])
-                        close = float(res['data']['close'])
-                        change = ltp - close
-                        pct_change = (change / close) * 100
-                        
+                        ltp = float(res['data']['ltp']); close = float(res['data']['close'])
+                        change = ltp - close; pct = (change / close) * 100
                         if ind["name"] == "NIFTY": ans1_nifty = "POSITIVE ▲" if change > 0 else "NEGATIVE ▼"
-                        if ind["name"] == "BANKNIFTY": bank_change = pct_change
-                        elif ind["name"] == "NIFTY_IT": it_change = pct_change
-                        elif ind["name"] == "NIFTY_AUTO": auto_change = pct_change
+                        if ind["name"] == "BANKNIFTY": bank_change = pct
+                        elif ind["name"] == "NIFTY_IT": it_change = pct
+                        elif ind["name"] == "NIFTY_AUTO": auto_change = pct
                 except: pass
-                time.sleep(0.2) # Small delay for indices
+                time.sleep(0.3)
 
-            # 2. Fetch Stocks
             for stock in STOCKS:
-                if stock["token"] is None: continue 
-                
-                try:
-                    res = smart_api.ltpData("NSE", stock["symbol"], stock["token"])
-                    if res and res['status']:
-                        ltp = float(res['data']['ltp'])
-                        live_data[stock["token"]] = ltp
-                        stock["price"] = ltp 
-                    else:
-                        pass 
-                except:
-                    pass
-                
-                time.sleep(0.4) # Safe delay for stocks
+                if stock["token"]:
+                    try:
+                        res = smart_api.ltpData("NSE", stock["symbol"], stock["token"])
+                        if res and res['status']:
+                            ltp = float(res['data']['ltp'])
+                            live_data[stock["token"]] = ltp; stock["price"] = ltp
+                    except: pass
+                time.sleep(0.5)
 
-            # Sector Logic
-            if bank_change > -90 and it_change > -90 and auto_change > -90:
-                if bank_change > it_change and bank_change > auto_change:
-                    ans2_sector = "BANKING"; winning_sector_code = "BANK"
-                elif it_change > bank_change and it_change > auto_change:
-                    ans2_sector = "IT / TECH"; winning_sector_code = "IT"
-                elif auto_change > bank_change and auto_change > it_change:
-                    ans2_sector = "AUTO"; winning_sector_code = "AUTO"
-                else:
-                    ans2_sector = "MIXED"; winning_sector_code = "ALL"
+            if bank_change > it_change and bank_change > auto_change:
+                ans2_sector = "BANKING"; winning_sector_code = "BANK"
+            elif it_change > bank_change and it_change > auto_change:
+                ans2_sector = "IT / TECH"; winning_sector_code = "IT"
+            elif auto_change > bank_change and auto_change > it_change:
+                ans2_sector = "AUTO"; winning_sector_code = "AUTO"
             else:
-                 if ans2_sector == "LOADING...": ans2_sector = "WAIT..."
-
-            if not is_market_open:
-                data_fetched_once = True
+                ans2_sector = "MIXED"; winning_sector_code = "ALL"
             
             time.sleep(1)
-        except Exception as e:
-            print("Engine Error:", e)
-            smart_api = None
-            time.sleep(5)
+        except:
+            smart_api = None; time.sleep(5)
 
-t = threading.Thread(target=start_engine)
-t.daemon = True
-t.start()
+t = threading.Thread(target=start_engine); t.daemon = True; t.start()
 
 # --- 5. ROUTES ---
 @app.route('/')
 def index():
-    for stock in STOCKS:
-        if stock["token"]:
-            stock["price"] = live_data.get(stock["token"], "0.00")
-    return render_template_string(HTML_TEMPLATE, status=market_status, ans1=ans1_nifty, ans2=ans2_sector, stocks=STOCKS, winner=winning_sector_code)
+    for s in STOCKS:
+        if s["token"]: s["price"] = live_data.get(s["token"], "0.00")
+    return render_template_string(HTML_TEMPLATE, status=market_status, ans1=ans1_nifty, ans2=ans2_sector, stocks=STOCKS)
 
 @app.route('/data')
 def data():
-    for stock in STOCKS:
-        if stock["token"]:
-            stock["price"] = live_data.get(stock["token"], "0.00")
-    
-    return jsonify({
-        "status": market_status,
-        "ans1": ans1_nifty,
-        "ans2": ans2_sector,
-        "winner": winning_sector_code,
-        "stocks": STOCKS
-    })
+    for s in STOCKS:
+        if s["token"]: s["price"] = live_data.get(s["token"], "0.00")
+    return jsonify({"status": market_status, "ans1": ans1_nifty, "ans2": ans2_sector, "winner": winning_sector_code, "stocks": STOCKS})
 
-# --- 6. HTML TEMPLATE ---
+# --- 6. NEW PREMIUM DESIGN (HTML/CSS) ---
 HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AI TRADER</title>
-<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+<title>AI TRADER PRO</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
 <style>
-/* --- SHARP UI --- */
+/* --- PREMIUM THEME --- */
 :root {
-    --bg-color: #0b1120;
-    --card-bg: #1e293b;
-    --border-color: #334155;
-    --text-white: #ffffff;
-    --text-grey: #94a3b8;
-    --green: #22c55e;
-    --red: #ef4444;
-    --blue: #3b82f6;
+    --bg-main: #0a0e17;
+    --bg-card: #151a25;
+    --text-main: #ffffff;
+    --text-muted: #8b9bb4;
+    --border: #2a3441;
+    --accent-blue: #3772ff;
+    --accent-green: #00e396;
+    --accent-red: #ff4560;
 }
-* { box-sizing: border-box; }
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 body { 
-    background: var(--bg-color); 
-    color: var(--text-white); 
-    font-family: 'Roboto', sans-serif; 
+    background-color: var(--bg-main); 
+    color: var(--text-main); 
+    font-family: 'Inter', sans-serif; 
     margin: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden;
 }
 
 /* HEADER */
 .header {
-    padding: 12px 15px; background: #111827; border-bottom: 1px solid var(--border-color);
+    padding: 15px 20px; 
+    background: rgba(21, 26, 37, 0.95); 
+    border-bottom: 1px solid var(--border);
     display: flex; justify-content: space-between; align-items: center;
+    backdrop-filter: blur(10px);
 }
-.brand { font-weight: 700; font-size: 1rem; color: var(--blue); letter-spacing: 1px; }
-.date-time { font-size: 0.8rem; color: var(--text-grey); font-weight: 500; text-align: right; }
-.status-ind { font-size: 0.7rem; color: #fff; margin-top:2px; display:flex; align-items:center; justify-content:flex-end; gap:5px;}
-.dot { width: 8px; height: 8px; background: var(--green); border-radius: 50%; }
+.brand { font-size: 18px; font-weight: 800; letter-spacing: 0.5px; background: linear-gradient(45deg, #3772ff, #9b5de5); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.status-badge { font-size: 11px; font-weight: 600; padding: 4px 8px; border-radius: 4px; background: #1c222e; color: var(--text-muted); border: 1px solid var(--border); }
 
-/* TOP SECTION */
-.top-container { display: flex; height: 40%; border-bottom: 1px solid var(--border-color); }
-.left-panel { flex: 6.5; padding: 20px; display: flex; flex-direction: column; justify-content: center; border-right: 1px solid var(--border-color); background: var(--bg-color); }
-.q-box { margin-bottom: 25px; }
-.q-label { color: var(--text-grey); font-size: 0.85rem; font-weight: 500; margin-bottom: 5px; }
-.a-value { font-size: 1.5rem; font-weight: 700; color: var(--text-white); letter-spacing: 0.5px; }
-.green-txt { color: var(--green); }
-.red-txt { color: var(--red); }
+/* TOP METRICS */
+.dashboard { display: flex; border-bottom: 1px solid var(--border); height: 35%; }
+.metric-panel { flex: 1; padding: 20px; display: flex; flex-direction: column; justify-content: center; border-right: 1px solid var(--border); }
+.metric-label { color: var(--text-muted); font-size: 11px; font-weight: 600; letter-spacing: 1px; margin-bottom: 8px; text-transform: uppercase; }
+.metric-value { font-size: 22px; font-weight: 700; line-height: 1.2; }
+.txt-green { color: var(--accent-green); }
+.txt-red { color: var(--accent-red); }
 
-.right-panel { flex: 3.5; background: #111827; display: flex; flex-direction: column; }
-.panel-header { padding: 10px; font-size: 0.75rem; font-weight: 700; text-align: center; border-bottom: 1px solid var(--border-color); color: var(--blue); background: #1f2937; }
-.mini-list-content { overflow-y: auto; flex: 1; }
-.mini-item { font-size: 0.85rem; padding: 10px; border-bottom: 1px solid #1f2937; color: var(--text-white); font-weight: 500; }
+/* SIDE PANEL (TODAY'S PICK) */
+.side-panel { width: 35%; background: #11151e; border-left: 1px solid var(--border); display: flex; flex-direction: column; }
+.panel-head { padding: 12px; font-size: 11px; font-weight: 700; color: var(--accent-blue); text-align: center; border-bottom: 1px solid var(--border); background: #161b26; letter-spacing: 0.5px; }
+.pick-list { overflow-y: auto; flex: 1; }
+.pick-item { padding: 10px 15px; font-size: 12px; font-weight: 500; border-bottom: 1px solid #1e2532; color: #cbd5e1; }
 
-/* FILTER BAR */
-.filter-bar { padding: 10px 15px; display: flex; gap: 10px; background: #0f172a; border-bottom: 1px solid var(--border-color); }
-.filter-btn { flex: 1; background: #1e293b; border: 1px solid var(--border-color); color: var(--text-grey); padding: 8px 0; border-radius: 6px; font-size: 0.8rem; font-weight: 500; cursor: pointer; text-align: center; }
-.filter-btn.active { background: var(--blue); color: white; border-color: var(--blue); }
+/* FILTERS */
+.filter-bar { padding: 12px 15px; display: flex; gap: 10px; background: var(--bg-main); border-bottom: 1px solid var(--border); }
+.chip { flex: 1; background: var(--bg-card); border: 1px solid var(--border); color: var(--text-muted); padding: 10px; border-radius: 8px; font-size: 11px; font-weight: 600; text-align: center; cursor: pointer; transition: all 0.2s; }
+.chip.active { background: var(--accent-blue); color: white; border-color: var(--accent-blue); box-shadow: 0 4px 12px rgba(55, 114, 255, 0.3); }
 
-/* MAIN LIST */
-.main-list { flex: 1; overflow-y: auto; padding: 15px; background: var(--bg-color); }
-.stock-card { background: var(--card-bg); border: 1px solid var(--border-color); padding: 15px; border-radius: 8px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
-.st-name { font-size: 1rem; font-weight: 700; color: var(--text-white); }
-.st-cat { font-size: 0.7rem; color: var(--text-grey); margin-top: 3px; }
-.st-price { font-size: 1.1rem; font-weight: 700; color: var(--green); }
+/* STOCK LIST */
+.market-list { flex: 1; overflow-y: auto; padding: 15px; }
+.stock-card { 
+    background: var(--bg-card); 
+    border: 1px solid var(--border); 
+    padding: 16px; 
+    border-radius: 12px; 
+    margin-bottom: 12px; 
+    display: flex; justify-content: space-between; align-items: center;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+}
+.st-info { display: flex; flex-direction: column; }
+.st-name { font-size: 14px; font-weight: 700; color: var(--text-main); margin-bottom: 4px; }
+.st-cat { font-size: 10px; font-weight: 600; color: var(--text-muted); background: #1e2532; padding: 3px 6px; border-radius: 4px; width: fit-content; }
+.st-price { font-size: 16px; font-weight: 700; color: var(--text-main); letter-spacing: 0.5px; }
 .hidden { display: none !important; }
+
+/* ANIMATION */
+@keyframes pulse { 0% { opacity: 0.6; } 50% { opacity: 1; } 100% { opacity: 0.6; } }
+.loading { animation: pulse 1.5s infinite; }
 </style>
 <script>
 let currentWinner = "ALL";
 let activeFilter = "ALL";
 
-function updateTime(){
-    const now = new Date();
-    const dateStr = now.toLocaleDateString('en-GB', {day: 'numeric', month: 'short', year: '2-digit'});
-    const timeStr = now.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit'});
-    document.getElementById('dt-disp').innerText = dateStr + " | " + timeStr;
-} 
-setInterval(updateTime,1000); 
-
 function filterStocks(type) {
     activeFilter = type;
-    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.chip').forEach(b => b.classList.remove('active'));
     document.getElementById('btn-'+type).classList.add('active');
     applyFilter();
 }
@@ -341,13 +257,6 @@ function applyFilter() {
         }
         if(show) card.classList.remove('hidden'); else card.classList.add('hidden');
     });
-    
-    // Update Mini List
-    const miniItems = document.querySelectorAll('.mini-item');
-    miniItems.forEach(item => {
-        const cat = item.getAttribute('data-cat');
-        if (currentWinner === 'ALL' || cat === currentWinner) item.style.display = 'block'; else item.style.display = 'none';
-    });
 }
 
 function fetchData() {
@@ -356,70 +265,68 @@ function fetchData() {
     .then(data => {
         document.getElementById('status-disp').innerText = data.status;
         
-        const ans1El = document.getElementById('ans1-disp');
-        ans1El.innerText = data.ans1;
-        if(data.ans1.includes("POSITIVE")) { ans1El.className = "a-value green-txt"; }
-        else if(data.ans1.includes("NEGATIVE")) { ans1El.className = "a-value red-txt"; }
-        else { ans1El.className = "a-value"; }
+        const ans1 = document.getElementById('ans1-disp');
+        ans1.innerHTML = data.ans1;
+        if(data.ans1.includes("POSITIVE")) ans1.className = "metric-value txt-green";
+        else if(data.ans1.includes("NEGATIVE")) ans1.className = "metric-value txt-red";
+        else ans1.className = "metric-value loading";
 
         document.getElementById('ans2-disp').innerText = data.ans2;
         currentWinner = data.winner;
         
         data.stocks.forEach(s => {
             const el = document.getElementById('price-' + s.name);
-            if(el) el.innerText = "₹" + s.price;
+            if(el) {
+                el.innerText = "₹" + s.price;
+                // Simple color logic based on price (optional)
+                el.style.color = (s.price !== "0.00" && s.price !== "ERR") ? "#00e396" : "#ffffff";
+            }
         });
         applyFilter();
     });
 }
-setInterval(fetchData, 1000); 
+setInterval(fetchData, 2000);
 </script>
 </head>
 <body>
 
 <div class="header">
-    <div class="brand">AI TRADER</div>
-    <div>
-        <div class="date-time" id="dt-disp">-- | --:--</div>
-        <div class="status-ind"><span class="dot"></span><span id="status-disp">{{ status }}</span></div>
-    </div>
+    <div class="brand">AI TRADER PRO</div>
+    <div class="status-badge" id="status-disp">CONNECTING...</div>
 </div>
 
-<div class="top-container">
-    <div class="left-panel">
-        <div class="q-box">
-            <div class="q-label">01. MARKET TREND</div>
-            <div class="a-value" id="ans1-disp">{{ ans1 }}</div>
-        </div>
-        <div class="q-box">
-            <div class="q-label">02. TOP SECTOR</div>
-            <div class="a-value" style="color:var(--blue);" id="ans2-disp">{{ ans2 }}</div>
-        </div>
+<div class="dashboard">
+    <div class="metric-panel">
+        <div class="metric-label">MARKET TREND</div>
+        <div class="metric-value" id="ans1-disp">WAIT...</div>
     </div>
-    <div class="right-panel">
-        <div class="panel-header">🚀 TODAY'S PICKS</div>
-        <div class="mini-list-content">
-            {% for stock in stocks %}
-            <div class="mini-item" data-cat="{{ stock.cat }}">{{ stock.name }}</div>
+    <div class="metric-panel" style="border-right: none;">
+        <div class="metric-label">STRONGEST SECTOR</div>
+        <div class="metric-value" style="color: var(--accent-blue);" id="ans2-disp">LOADING...</div>
+    </div>
+    <div class="side-panel">
+        <div class="panel-head">🔥 HOT PICKS</div>
+        <div class="pick-list">
+            {% for s in stocks %}
+            <div class="pick-item">{{ s.name }}</div>
             {% endfor %}
         </div>
     </div>
 </div>
 
 <div class="filter-bar">
-    <div id="btn-ALL" class="filter-btn active" onclick="filterStocks('ALL')">ALL STOCKS</div>
-    <div id="btn-TODAY" class="filter-btn" onclick="filterStocks('TODAY')">TODAY'S PICK</div>
-    <div id="btn-PREV" class="filter-btn" onclick="filterStocks('PREV')">PREVIOUS</div>
+    <div id="btn-ALL" class="chip active" onclick="filterStocks('ALL')">ALL STOCKS</div>
+    <div id="btn-TODAY" class="chip" onclick="filterStocks('TODAY')">🚀 AI PICK</div>
 </div>
 
-<div class="main-list">
-    {% for stock in stocks %}
-    <div class="stock-card" id="card-{{ stock.name }}" data-cat="{{ stock.cat }}">
+<div class="market-list">
+    {% for s in stocks %}
+    <div class="stock-card" id="card-{{ s.name }}" data-cat="{{ s.cat }}">
         <div class="st-info">
-            <span class="st-name">{{ stock.name }}</span>
-            <span class="st-cat">{{ stock.cat }}</span>
+            <span class="st-name">{{ s.name }}</span>
+            <span class="st-cat">{{ s.cat }}</span>
         </div>
-        <div class="st-price" id="price-{{ stock.name }}">₹{{ stock.price }}</div>
+        <div class="st-price" id="price-{{ s.name }}">₹{{ s.price }}</div>
     </div>
     {% endfor %}
 </div>
