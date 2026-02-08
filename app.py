@@ -84,7 +84,7 @@ def fetch_correct_tokens(smart_api):
     STOCKS = temp_stocks
     print(">>> SCAN COMPLETE <<<\n")
 
-# --- 4. ENGINE (UPDATED TO BATCH MODE ONLY) ---
+# --- 4. ENGINE (FIXED BATCH MODE) ---
 def start_engine():
     global live_data, market_status, ans1_nifty, ans2_sector, winning_sector_code, data_fetched_once, tokens_loaded
     smart_api = None
@@ -107,7 +107,7 @@ def start_engine():
 
             bank_change = -100.0; it_change = -100.0; auto_change = -100.0
 
-            # A. FETCH INDICES (Keep individual for safety of Nifty Logic)
+            # A. FETCH INDICES
             for ind in INDICES_LIST:
                 try:
                     res = smart_api.ltpData("NSE", ind["symbol"], ind["token"])
@@ -119,30 +119,40 @@ def start_engine():
                         elif ind["name"] == "NIFTY_IT": it_change = pct
                         elif ind["name"] == "NIFTY_AUTO": auto_change = pct
                 except: pass
-                time.sleep(0.2) # Small delay for indices
+                time.sleep(0.2)
 
-            # B. FETCH STOCKS (BATCH MODE - The Upgrade)
+            # B. FETCH STOCKS (BATCH MODE WITH CRASH PROTECTION)
             try:
-                # 1. Collect all valid tokens
                 token_list = [s["token"] for s in STOCKS if s["token"]]
                 
                 if token_list:
-                    # 2. Single API Call for ALL stocks
-                    batch_res = smart_api.getLtpData("NSE", "ALL", token_list)
+                    batch_res = None
+                    # Safe Check: Does the function exist?
+                    if hasattr(smart_api, 'getLtpData'):
+                        batch_res = smart_api.getLtpData("NSE", "ALL", token_list)
+                    elif hasattr(smart_api, 'getltpData'): # Try alternate name
+                        batch_res = smart_api.getltpData("NSE", "ALL", token_list)
+                    else:
+                        # Fallback for old library (Prevents Crash)
+                        print("⚠️ Waiting for Library Update... Using Slow Mode")
+                        for s in STOCKS:
+                            if s["token"]:
+                                r = smart_api.ltpData("NSE", s["symbol"], s["token"])
+                                if r and r['status']:
+                                    live_data[s["token"]] = float(r['data']['ltp'])
+                                    s["price"] = float(r['data']['ltp'])
+                                time.sleep(0.2)
                     
+                    # If Batch worked
                     if batch_res and batch_res['status'] and batch_res['data']:
-                        # 3. Update all stocks at once
                         for item in batch_res['data']:
                             tkn = item['symboltoken']
                             ltp = float(item['ltp'])
                             live_data[tkn] = ltp
-                            
-                            # Update main list
                             for s in STOCKS:
-                                if s['token'] == tkn:
-                                    s['price'] = ltp
+                                if s['token'] == tkn: s['price'] = ltp
             except Exception as e:
-                print("Batch Error:", e)
+                print("Batch Skip:", e)
 
             # Sector Logic
             if bank_change > it_change and bank_change > auto_change:
@@ -154,7 +164,6 @@ def start_engine():
             else:
                 ans2_sector = "MIXED"; winning_sector_code = "ALL"
             
-            # Wait 1.5s before next batch (Safe & Fast)
             time.sleep(1.5)
 
         except:
