@@ -2,7 +2,7 @@ import os
 import pyotp
 import time
 import threading
-from concurrent.futures import ThreadPoolExecutor
+import requests # 1. हे नवीन ऍड केले आहे (वेबसाईट झोपू नये म्हणून)
 from datetime import datetime, timedelta, timezone
 from flask import Flask, render_template_string, jsonify
 from SmartApi import SmartConnect
@@ -14,16 +14,15 @@ API_KEY = os.environ.get("API_KEY")
 CLIENT_ID = os.environ.get("CLIENT_ID")
 PASSWORD = os.environ.get("PASSWORD")
 TOTP_KEY = os.environ.get("TOTP_KEY")
+RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL") # 2. रेंडरची लिंक घेण्यासाठी
 
 live_data = {} 
 market_status = "CHECKING..."
 ans1_nifty = "WAIT..."
 ans2_sector = "LOADING..."
 winning_sector_code = "ALL"
+data_fetched_once = False
 tokens_loaded = False 
-
-# Sector Logic Variables (Globally shared for Threads)
-sector_snapshot = {"BANKNIFTY": -100.0, "NIFTY_IT": -100.0, "NIFTY_AUTO": -100.0}
 
 # --- 2. STOCK CONFIGURATION (UNTOUCHED) ---
 TARGET_STOCKS = [
@@ -46,7 +45,7 @@ INDICES_LIST = [
 
 STOCKS = []
 
-# --- 3. AUTO-SCANNER (UNTOUCHED) ---
+# --- 3. AUTO-SCANNER (UNTOUCHED - SAFE MODE) ---
 def fetch_correct_tokens(smart_api):
     global STOCKS
     print("\n>>> STARTING NSE TOKEN SCANNER (SAFE MODE) <<<")
@@ -55,7 +54,7 @@ def fetch_correct_tokens(smart_api):
     for item in TARGET_STOCKS:
         name = item["name"]
         cat = item["cat"]
-        time.sleep(0.6) 
+        time.sleep(1.2) 
         try:
             search_response = smart_api.searchScrip("NSE", name)
             scrip_list = []
@@ -87,53 +86,46 @@ def fetch_correct_tokens(smart_api):
     STOCKS = temp_stocks
     print(">>> SCAN COMPLETE <<<\n")
 
-# --- 4. ENGINE (UPDATED: TRUE PARALLEL PROCESSING) ---
-
-# Helper function for Threads (Indices)
-def fetch_index_task(ind, api_ref):
-    global ans1_nifty
-    try:
-        res = api_ref.ltpData("NSE", ind["symbol"], ind["token"])
-        if res and res['status']:
-            ltp = float(res['data']['ltp'])
-            close = float(res['data']['close'])
-            change = ltp - close
-            pct = (change / close) * 100
-            
-            # Update Nifty Global
-            if ind["name"] == "NIFTY":
-                ans1_nifty = "POSITIVE ▲" if change > 0 else "NEGATIVE ▼"
-            
-            # Update Sector Logic
-            if ind["name"] in sector_snapshot:
-                sector_snapshot[ind["name"]] = pct
-    except: pass
-
-# Helper function for Threads (Stocks)
-def fetch_stock_task(stock, api_ref):
-    if not stock["token"]: return
-    try:
-        res = api_ref.ltpData("NSE", stock["symbol"], stock["token"])
-        if res and res['status']:
-            ltp = float(res['data']['ltp'])
-            live_data[stock["token"]] = ltp
-            stock["price"] = ltp
-    except: pass
-
+# --- 4. ENGINE (MARKET TIME + KEEP ALIVE ADDED) ---
 def start_engine():
-    global live_data, market_status, ans1_nifty, ans2_sector, winning_sector_code, tokens_loaded
+    global live_data, market_status, ans1_nifty, ans2_sector, winning_sector_code, data_fetched_once, tokens_loaded
     smart_api = None
-    
-    # Increased workers to 5 (Handles Indices + Stocks together)
-    executor = ThreadPoolExecutor(max_workers=5)
+    last_ping_time = time.time() # 3. हे टाइमर आहे (वेबसाईट चालू ठेवण्यासाठी)
 
     while True:
         try:
+            # --- 4. MARKET TIME CHECK ---
             utc_now = datetime.now(timezone.utc)
             ist_now = utc_now + timedelta(hours=5, minutes=30)
-            is_market_open = (ist_now.weekday() < 5 and datetime.strptime("09:00", "%H:%M").time() <= ist_now.time() <= datetime.strptime("15:30", "%H:%M").time())
-            market_status = "LIVE" if is_market_open else "CLOSED"
+            current_time = ist_now.time()
+            is_weekday = ist_now.weekday() < 5 # सोमवार ते शुक्रवार
+            
+            # मार्केट वेळ: सकाळी 09:00 ते दुपारी 03:35
+            market_open = datetime.strptime("09:00", "%H:%M").time()
+            market_close = datetime.strptime("15:35", "%H:%M").time()
+            
+            is_market_active = is_weekday and (market_open <= current_time <= market_close)
 
+            # --- 5. KEEP ALIVE LOGIC (PING) ---
+            # दर १० मिनिटांनी (६०० सेकंद) वेबसाईटला स्वतः पिंग करा
+            if time.time() - last_ping_time > 600:
+                if RENDER_URL:
+                    try:
+                        requests.get(RENDER_URL)
+                        print(">>> SELF PING SUCCESSFUL (Keep-Alive) <<<")
+                    except:
+                        pass
+                last_ping_time = time.time()
+
+            # जर मार्केट बंद असेल, तर डेटा फेच करू नका (फक्त झोपा)
+            if not is_market_active:
+                market_status = "CLOSED"
+                time.sleep(60) # १ मिनिट थांबा
+                continue 
+
+            market_status = "LIVE"
+
+            # --- 6. ORIGINAL LOGIC (UNTOUCHED) ---
             if smart_api is None:
                 totp = pyotp.TOTP(TOTP_KEY).now()
                 smart_api = SmartConnect(api_key=API_KEY)
@@ -143,25 +135,30 @@ def start_engine():
 
             if not tokens_loaded: time.sleep(1); continue
 
-            # --- PARALLEL EXECUTION START ---
-            futures = []
-            
-            # 1. Add Indices to Workers (No more waiting!)
-            for ind in INDICES_LIST:
-                futures.append(executor.submit(fetch_index_task, ind, smart_api))
-            
-            # 2. Add Stocks to Workers
-            for stock in STOCKS:
-                futures.append(executor.submit(fetch_stock_task, stock, smart_api))
-            
-            # 3. Wait for ALL data (This happens very fast now)
-            for f in futures:
-                f.result()
+            bank_change = -100.0; it_change = -100.0; auto_change = -100.0
 
-            # --- SECTOR LOGIC (Instant Calculation) ---
-            bank_change = sector_snapshot["BANKNIFTY"]
-            it_change = sector_snapshot["NIFTY_IT"]
-            auto_change = sector_snapshot["NIFTY_AUTO"]
+            for ind in INDICES_LIST:
+                try:
+                    res = smart_api.ltpData("NSE", ind["symbol"], ind["token"])
+                    if res and res['status']:
+                        ltp = float(res['data']['ltp']); close = float(res['data']['close'])
+                        change = ltp - close; pct = (change / close) * 100
+                        if ind["name"] == "NIFTY": ans1_nifty = "POSITIVE ▲" if change > 0 else "NEGATIVE ▼"
+                        if ind["name"] == "BANKNIFTY": bank_change = pct
+                        elif ind["name"] == "NIFTY_IT": it_change = pct
+                        elif ind["name"] == "NIFTY_AUTO": auto_change = pct
+                except: pass
+                time.sleep(0.3)
+
+            for stock in STOCKS:
+                if stock["token"]:
+                    try:
+                        res = smart_api.ltpData("NSE", stock["symbol"], stock["token"])
+                        if res and res['status']:
+                            ltp = float(res['data']['ltp'])
+                            live_data[stock["token"]] = ltp; stock["price"] = ltp
+                    except: pass
+                time.sleep(0.5)
 
             if bank_change > it_change and bank_change > auto_change:
                 ans2_sector = "BANKING"; winning_sector_code = "BANK"
@@ -172,15 +169,13 @@ def start_engine():
             else:
                 ans2_sector = "MIXED"; winning_sector_code = "ALL"
             
-            # Reduced sleep for faster refresh
-            time.sleep(0.5)
-
+            time.sleep(1)
         except:
             smart_api = None; time.sleep(5)
 
 t = threading.Thread(target=start_engine); t.daemon = True; t.start()
 
-# --- 5. ROUTES (UNTOUCHED) ---
+# --- 5. ROUTES ---
 @app.route('/')
 def index():
     for s in STOCKS:
@@ -193,7 +188,7 @@ def data():
         if s["token"]: s["price"] = live_data.get(s["token"], "0.00")
     return jsonify({"status": market_status, "ans1": ans1_nifty, "ans2": ans2_sector, "winner": winning_sector_code, "stocks": STOCKS})
 
-# --- 6. PREMIUM DESIGN (UNTOUCHED) ---
+# --- 6. NEW PREMIUM DESIGN (HTML/CSS) ---
 HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -321,7 +316,7 @@ function fetchData() {
         applyFilter();
     });
 }
-setInterval(fetchData, 1500);
+setInterval(fetchData, 2000);
 </script>
 </head>
 <body>
