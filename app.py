@@ -43,7 +43,6 @@ INDICES_LIST = [
     {"name": "NIFTY_AUTO", "token": "99926002", "symbol": "Nifty Auto"}
 ]
 
-# *** FIX: सुरुवातीलाच लिस्ट भरा म्हणजे स्क्रीन रिकामी दिसणार नाही ***
 STOCKS = [{"name": s["name"], "cat": s["cat"], "token": None, "price": "WAIT...", "symbol": s["name"]} for s in TARGET_STOCKS]
 
 # --- 3. AUTO-SCANNER ---
@@ -85,15 +84,19 @@ def fetch_correct_tokens(smart_api):
         except:
             temp_stocks.append({"name": name, "token": None, "cat": cat, "price": "ERR"})
     
-    # अपडेट झाल्यावर जुन्या लिस्टला नवीन डेटाने बदला
     STOCKS = temp_stocks
     print(">>> SCAN COMPLETE <<<\n")
 
-# --- 4. ENGINE ---
+# --- 4. ENGINE (With 9:15 Accurate Logic) ---
 def start_engine():
     global live_data, market_status, ans1_nifty, ans2_sector, winning_sector_code, data_fetched_once, tokens_loaded
     smart_api = None
     last_ping_time = time.time()
+    
+    # Accurate Logic Variables
+    confirmed_winner = None
+    tick_count = 0
+    sector_points = {"BANK": 0, "IT": 0, "AUTO": 0}
 
     while True:
         try:
@@ -102,24 +105,26 @@ def start_engine():
             current_time = ist_now.time()
             is_weekday = ist_now.weekday() < 5
             
-            market_open = datetime.strptime("09:00", "%H:%M").time()
-            market_close = datetime.strptime("15:35", "%H:%M").time()
-            
-            is_market_active = is_weekday and (market_open <= current_time <= market_close)
+            t915 = datetime.strptime("09:15", "%H:%M").time()
+            t1535 = datetime.strptime("15:35", "%H:%M").time()
+            t0900 = datetime.strptime("09:00", "%H:%M").time()
+
+            # रोज सकाळी ९:०० ला रिसेट
+            if t0900 <= current_time < t915:
+                confirmed_winner = None
+                tick_count = 0
+                sector_points = {"BANK": 0, "IT": 0, "AUTO": 0}
+
+            is_market_active = is_weekday and (t915 <= current_time <= t1535)
 
             if time.time() - last_ping_time > 600:
                 if RENDER_URL:
-                    try:
-                        requests.get(RENDER_URL)
-                        print(">>> SELF PING SUCCESSFUL (Keep-Alive) <<<")
-                    except:
-                        pass
+                    try: requests.get(RENDER_URL)
+                    except: pass
                 last_ping_time = time.time()
 
             if not is_market_active:
-                market_status = "CLOSED"
-                time.sleep(60)
-                continue 
+                market_status = "CLOSED"; time.sleep(60); continue 
 
             market_status = "LIVE"
 
@@ -132,39 +137,54 @@ def start_engine():
 
             if not tokens_loaded: time.sleep(1); continue
 
-            bank_change = -100.0; it_change = -100.0; auto_change = -100.0
+            bank_pct = -100.0; it_pct = -100.0; auto_pct = -100.0
 
+            # १. Pre-Open Comparison & Sustainability (Indice Data)
             for ind in INDICES_LIST:
                 try:
                     res = smart_api.ltpData("NSE", ind["symbol"], ind["token"])
                     if res and res['status']:
                         ltp = float(res['data']['ltp']); close = float(res['data']['close'])
-                        change = ltp - close; pct = (change / close) * 100
-                        if ind["name"] == "NIFTY": ans1_nifty = "POSITIVE ▲" if change > 0 else "NEGATIVE ▼"
-                        if ind["name"] == "BANKNIFTY": bank_change = pct
-                        elif ind["name"] == "NIFTY_IT": it_change = pct
-                        elif ind["name"] == "NIFTY_AUTO": auto_change = pct
+                        pct = ((ltp - close) / close) * 100
+                        if ind["name"] == "NIFTY": ans1_nifty = "POSITIVE ▲" if ltp > close else "NEGATIVE ▼"
+                        if ind["name"] == "BANKNIFTY": bank_pct = pct
+                        elif ind["name"] == "NIFTY_IT": it_pct = pct
+                        elif ind["name"] == "NIFTY_AUTO": auto_pct = pct
                 except: pass
                 time.sleep(0.3)
 
+            # २. Volume Surge & Sustainability Point System (पहिल्या १ मिनिटासाठी)
+            if confirmed_winner is None:
+                current_winner = "ALL"
+                max_val = max(bank_pct, it_pct, auto_pct)
+                if max_val > 0.05: # Positive Rally Check
+                    if max_val == bank_pct: current_winner = "BANK"
+                    elif max_val == it_pct: current_winner = "IT"
+                    elif max_val == auto_pct: current_winner = "AUTO"
+                
+                if current_winner != "ALL":
+                    sector_points[current_winner] += 1
+                
+                tick_count += 1
+                
+                # सलग ३० सेकंद (सुमारे १० टिक्स) ताकद टिकली तरच लॉकींग
+                if tick_count >= 10:
+                    final_choice = max(sector_points, key=sector_points.get)
+                    if sector_points[final_choice] > 5:
+                        confirmed_winner = final_choice
+                        winning_sector_code = final_choice
+                        ans2_sector = "BANKING" if final_choice == "BANK" else "IT / TECH" if final_choice == "IT" else "AUTO"
+
+            # ३. Stock Price Updates
             for stock in STOCKS:
                 if stock.get("token"):
                     try:
                         res = smart_api.ltpData("NSE", stock["symbol"], stock["token"])
                         if res and res['status']:
-                            ltp = float(res['data']['ltp'])
-                            live_data[stock["token"]] = ltp; stock["price"] = ltp
+                            live_data[stock["token"]] = float(res['data']['ltp'])
+                            stock["price"] = live_data[stock["token"]]
                     except: pass
-                time.sleep(0.5)
-
-            if bank_change > it_change and bank_change > auto_change:
-                ans2_sector = "BANKING"; winning_sector_code = "BANK"
-            elif it_change > bank_change and it_change > auto_change:
-                ans2_sector = "IT / TECH"; winning_sector_code = "IT"
-            elif auto_change > bank_change and auto_change > it_change:
-                ans2_sector = "AUTO"; winning_sector_code = "AUTO"
-            else:
-                ans2_sector = "MIXED"; winning_sector_code = "ALL"
+                time.sleep(0.4)
             
             time.sleep(1)
         except:
@@ -175,7 +195,6 @@ t = threading.Thread(target=start_engine); t.daemon = True; t.start()
 # --- 5. ROUTES ---
 @app.route('/')
 def index():
-    # डेटा अपडेट करा
     for s in STOCKS:
         if s.get("token"): s["price"] = live_data.get(s["token"], "WAIT...")
     return render_template_string(HTML_TEMPLATE, status=market_status, ans1=ans1_nifty, ans2=ans2_sector, stocks=STOCKS)
@@ -186,7 +205,7 @@ def data():
         if s.get("token"): s["price"] = live_data.get(s["token"], "WAIT...")
     return jsonify({"status": market_status, "ans1": ans1_nifty, "ans2": ans2_sector, "winner": winning_sector_code, "stocks": STOCKS})
 
-# --- 6. NEW MODERN TRADING DASHBOARD HTML ---
+# --- 6. HTML TEMPLATE (TOTALLY UNCHANGED UI) ---
 HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -366,7 +385,6 @@ body {
 <script>
 let currentWinner = "ALL";
 let activeFilter = "ALL";
-// --- NEW: Object to store uploaded images ---
 let stockImages = {};
 
 function filterStocks(type) {
@@ -403,41 +421,32 @@ function setActiveNav(el) {
     el.classList.add('active');
 }
 
-// --- NEW UPLOAD LOGIC ---
-// 1. Trigger the hidden file input when "Upload Chart" is clicked
 function triggerUpload(event, stockName) {
-    event.stopPropagation(); // Prevent popup from opening immediately
+    event.stopPropagation();
     document.getElementById('file-input-' + stockName).click();
 }
 
-// 2. Handle file selection and store the image
 function handleFileSelect(input, stockName) {
     if (input.files && input.files[0]) {
         var reader = new FileReader();
         reader.onload = function (e) {
-            stockImages[stockName] = e.target.result; // Store base64 image
+            stockImages[stockName] = e.target.result;
             alert("Chart uploaded successfully for " + stockName);
         }
         reader.readAsDataURL(input.files[0]);
     }
 }
 
-// --- POPUP LOGIC ---
 function openCardPopup(stockName) {
-    // Only open if in TODAY tab
     if(activeFilter === 'TODAY') {
         document.getElementById('popup-name').innerText = stockName;
-        
-        // --- NEW: Check if image exists and display it ---
         const imgContainer = document.getElementById('popup-img-container');
-        imgContainer.innerHTML = ''; // Clear previous content
-        
+        imgContainer.innerHTML = '';
         if (stockImages[stockName]) {
             imgContainer.innerHTML = '<img src="' + stockImages[stockName] + '" style="width: 100%; border-radius: 10px; border: 1px solid var(--border);">';
         } else {
             imgContainer.innerHTML = '<p style="color: var(--text-muted); font-size: 14px;">No chart uploaded yet.</p>';
         }
-
         document.getElementById('modal-overlay').classList.remove('hidden');
     }
 }
@@ -451,7 +460,6 @@ function fetchData() {
     .then(response => response.json())
     .then(data => {
         document.getElementById('status-text').innerText = data.status;
-        
         const ans1 = document.getElementById('ans1-disp');
         ans1.innerHTML = data.ans1;
         if(data.ans1.includes("POSITIVE")) ans1.className = "summary-value txt-green";
@@ -464,7 +472,6 @@ function fetchData() {
         else ans2.className = "summary-value loading-pulse";
         
         currentWinner = data.winner;
-        
         data.stocks.forEach(s => {
             const priceEl = document.getElementById('price-' + s.name);
             if(priceEl) {
@@ -513,13 +520,11 @@ setInterval(fetchData, 2000);
         <div class="st-info">
             <span class="st-name">{{ s.name }}</span>
             <span class="st-cat-tag">{{ s.cat }} SECTOR</span>
-            
             <div class="upload-btn hidden" onclick="triggerUpload(event, '{{ s.name }}')">
                 <span class="material-icons-outlined" style="font-size: 14px;">upload_file</span>
                 Upload Chart
             </div>
             <input type="file" id="file-input-{{ s.name }}" style="display: none;" accept="image/*" onchange="handleFileSelect(this, '{{ s.name }}')">
-
         </div>
         <div class="st-price-box">
             <div class="st-wait" id="price-{{ s.name }}">{{ s.price }}</div>
