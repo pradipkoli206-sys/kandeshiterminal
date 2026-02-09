@@ -2,13 +2,11 @@ import os
 import pyotp
 import time
 import threading
-import requests
-import asyncio
 import json
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from flask import Flask, render_template_string, jsonify
 from SmartApi import SmartConnect
+from SmartApi.smartWebSocketV2 import SmartWebSocketV2
 from flask_socketio import SocketIO, emit
 
 app = Flask(__name__)
@@ -23,61 +21,42 @@ PASSWORD = os.environ.get("PASSWORD")
 TOTP_KEY = os.environ.get("TOTP_KEY")
 RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL")
 
+# Global Variables
+smart_api = None
+sws = None # SmartWebSocket Object
 live_data = {} 
 market_status = "CHECKING..."
 ans1_nifty = "WAIT..."
 ans2_sector = "LOADING..."
 winning_sector_code = "ALL"
-data_fetched_once = False
 tokens_loaded = False 
 
 # --- 1.1 MARKET HOLIDAYS LIST (2026) ---
 NSE_HOLIDAYS = [
-    "2026-01-26", # Republic Day
-    "2026-02-17", # Mahashivratri
-    "2026-03-04", # Holi
-    "2026-03-20", # Gudhi Padwa
-    "2026-04-03", # Good Friday
-    "2026-04-14", # Ambedkar Jayanti
-    "2026-05-01", # Maharashtra Day
-    "2026-08-15", # Independence Day
-    "2026-09-15", # Ganesh Chaturthi
-    "2026-10-02", # Gandhi Jayanti
-    "2026-10-02", # Gandhi Jayanti
-    "2026-10-20", # Dasara
-    "2026-11-08", # Diwali (Laxmi Pujan)
-    "2026-12-25"  # Christmas
+    "2026-01-26", "2026-02-17", "2026-03-04", "2026-03-20", 
+    "2026-04-03", "2026-04-14", "2026-05-01", "2026-08-15", 
+    "2026-09-15", "2026-10-02", "2026-10-20", "2026-11-08", "2026-12-25"
 ]
 
-# --- MEMORY SYSTEM (JSON FILE HANDLING) ---
+# --- MEMORY SYSTEM ---
 STATE_FILE = "trade_state.json"
 
 def save_state(winner, sector_code):
-    """Saves the locked winner to a file to survive restarts"""
     try:
-        data = {
-            "date": str(datetime.now(timezone.utc).date()), # Universal date check
-            "winner": winner,
-            "code": sector_code
-        }
-        with open(STATE_FILE, "w") as f:
-            json.dump(data, f)
+        data = { "date": str(datetime.now(timezone.utc).date()), "winner": winner, "code": sector_code }
+        with open(STATE_FILE, "w") as f: json.dump(data, f)
         print(f"💾 MEMORY SAVED: {winner}")
-    except Exception as e:
-        print(f"Save Error: {e}")
+    except Exception as e: print(f"Save Error: {e}")
 
 def load_state():
-    """Loads the winner from file if server restarts"""
     try:
         if os.path.exists(STATE_FILE):
             with open(STATE_FILE, "r") as f:
                 data = json.load(f)
-                # Check if the data is from TODAY
                 if data.get("date") == str(datetime.now(timezone.utc).date()):
                     print(f"♻️ MEMORY RESTORED: {data['winner']}")
                     return data["winner"], data["code"]
-    except Exception as e:
-        print(f"Load Error: {e}")
+    except Exception as e: print(f"Load Error: {e}")
     return None, "ALL"
 
 # --- 2. STOCK CONFIGURATION ---
@@ -99,41 +78,38 @@ INDICES_LIST = [
     {"name": "NIFTY_AUTO", "token": "99926002", "symbol": "Nifty Auto"}
 ]
 
+# Master List for easy lookup
 STOCKS = [{"name": s["name"], "cat": s["cat"], "token": None, "price": "WAIT...", "symbol": s["name"]} for s in TARGET_STOCKS]
+TOKEN_MAP = {} # Token -> Stock Object Mapping
 
 # --- 3. AUTO-SCANNER ---
-def fetch_correct_tokens(smart_api):
-    global STOCKS
-    print("\n>>> STARTING NSE TOKEN SCANNER (SAFE MODE) <<<")
+def fetch_correct_tokens(api_obj):
+    global STOCKS, TOKEN_MAP
+    print("\n>>> STARTING NSE TOKEN SCANNER <<<")
     temp_stocks = []
+    TOKEN_MAP = {} # Clear map
     
+    # 1. Fetch Stocks
     for item in TARGET_STOCKS:
-        name = item["name"]
-        cat = item["cat"]
-        time.sleep(1.2) 
+        name = item["name"]; cat = item["cat"]
+        time.sleep(0.5)
         try:
-            search_response = smart_api.searchScrip("NSE", name)
-            scrip_list = []
-            if search_response and isinstance(search_response, dict) and 'data' in search_response:
-                scrip_list = search_response['data']
-            elif search_response and isinstance(search_response, list):
-                scrip_list = search_response
-
+            search_response = api_obj.searchScrip("NSE", name)
+            scrip_list = search_response['data'] if search_response and 'data' in search_response else []
+            
             found_token = None
-            found_symbol = None
             if scrip_list:
                 for s in scrip_list:
-                    if s['tradingsymbol'] == name + "-EQ":
-                        found_token = s['symboltoken']; found_symbol = s['tradingsymbol']
-                        break
+                    if s['tradingsymbol'] == name + "-EQ": found_token = s['symboltoken']; break
                 if not found_token:
                     for s in scrip_list:
-                        if s['tradingsymbol'] == name + "-BE":
-                            found_token = s['symboltoken']; found_symbol = s['tradingsymbol']
-                            break
+                        if s['tradingsymbol'] == name + "-BE": found_token = s['symboltoken']; break
+            
             if found_token:
-                print(f"✅ FOUND: {name}")
-                temp_stocks.append({"name": name, "token": found_token, "symbol": found_symbol, "cat": cat, "price": "0.00"})
+                print(f"✅ FOUND: {name} -> {found_token}")
+                stock_obj = {"name": name, "token": found_token, "cat": cat, "price": "0.00"}
+                temp_stocks.append(stock_obj)
+                TOKEN_MAP[found_token] = stock_obj # Map Token to Object
             else:
                 print(f"❌ FAILED: {name}")
                 temp_stocks.append({"name": name, "token": None, "cat": cat, "price": "ERR"})
@@ -141,172 +117,93 @@ def fetch_correct_tokens(smart_api):
             temp_stocks.append({"name": name, "token": None, "cat": cat, "price": "ERR"})
     
     STOCKS = temp_stocks
+
+    # 2. Add Indices to Token Map (Hardcoded Tokens)
+    for ind in INDICES_LIST:
+        TOKEN_MAP[ind["token"]] = {"name": ind["name"], "cat": "INDEX", "price": 0.0, "open": 0.0}
+
     print(">>> SCAN COMPLETE <<<\n")
 
-# --- 4. ENGINE (Multi-Threading & Async Logic) ---
-def get_single_ltp(smart_api, exchange, symbol, token):
-    # ✅ RETRY LOGIC ADDED: Try 3 Times
-    for i in range(3):
-        try:
-            res = smart_api.ltpData(exchange, symbol, token)
-            if res and res['status']:
-                return res['data']
-        except:
-            time.sleep(0.1) # Wait 0.1s before retry
-    return None
-
-def start_engine():
-    global live_data, market_status, ans1_nifty, ans2_sector, winning_sector_code, tokens_loaded
-    smart_api = None
-    last_ping_time = time.time()
+# --- 4. ANGEL ONE WEBSOCKET LOGIC ---
+def on_data(wsapp, msg):
+    global live_data, ans1_nifty, ans2_sector, winning_sector_code, market_status
     
-    # ✅ RESTORE STATE ON STARTUP
-    confirmed_winner, loaded_code = load_state()
-    winning_sector_code = loaded_code
-    if confirmed_winner:
-        ans2_sector = "BANKING" if confirmed_winner == "BANK" else "IT / TECH" if confirmed_winner == "IT" else "AUTO"
+    # Check if market is open/live based on data flow
+    market_status = "LIVE" 
     
-    tick_count = 0
-    sector_points = {"BANK": 0, "IT": 0, "AUTO": 0}
-
-    while True:
-        try:
-            utc_now = datetime.now(timezone.utc)
-            ist_now = utc_now + timedelta(hours=5, minutes=30)
-            current_time = ist_now.time()
-            today_str = str(ist_now.date()) # Get today's date
-            is_weekday = ist_now.weekday() < 5
+    # Parse Binary/JSON data from Angel One
+    # Note: SmartWebSocketV2 usually returns a dictionary directly
+    if isinstance(msg, dict):
+        token = msg.get("token")
+        ltp = float(msg.get("last_traded_price", 0))
+        open_price = float(msg.get("open_price_of_the_day", 0)) # Important for % calc
+        
+        if token in TOKEN_MAP:
+            # Update Price in Memory
+            TOKEN_MAP[token]["price"] = ltp
+            if open_price > 0: TOKEN_MAP[token]["open"] = open_price # Cache open price
             
-            # --- HOLIDAY CHECK ---
-            if today_str in NSE_HOLIDAYS:
-                market_status = "HOLIDAY"
-                ans1_nifty = "HOLIDAY"
-                ans2_sector = "MARKET CLOSED"
-                
-                # Emit holiday status via Websocket
-                socketio.emit('update_data', {
-                    "status": market_status, "ans1": ans1_nifty, 
-                    "ans2": ans2_sector, "winner": winning_sector_code, "stocks": STOCKS
-                })
-                
-                time.sleep(60)
-                continue
-
-            t915 = datetime.strptime("09:15", "%H:%M").time()
-            t_lock = datetime.strptime("09:20:00", "%H:%M:%S").time() 
-            t1530 = datetime.strptime("15:30", "%H:%M").time()
-            t1535 = datetime.strptime("15:35", "%H:%M").time()
-            t0900 = datetime.strptime("09:00", "%H:%M").time()
-
-            if t0900 <= current_time < t915:
-                # 9:00 AM Reset Logic
-                if confirmed_winner is not None:
-                    save_state(None, "ALL") 
-                confirmed_winner = None
-                tick_count = 0
-                sector_points = {"BANK": 0, "IT": 0, "AUTO": 0}
-                ans2_sector = "WAIT FOR 9:15"
-                winning_sector_code = "ALL"
-
-            # ✅ TEST MODE ON
-            is_market_active = True 
-
-            if time.time() - last_ping_time > 600:
-                if RENDER_URL:
-                    try: requests.get(RENDER_URL)
-                    except: pass
-                last_ping_time = time.time()
-
-            if not is_market_active:
-                market_status = "CLOSED"
-                socketio.emit('update_data', {
-                    "status": market_status, "ans1": ans1_nifty, 
-                    "ans2": ans2_sector, "winner": winning_sector_code, "stocks": STOCKS
-                })
-                time.sleep(30)
-                continue 
-
-            market_status = "LIVE"
-
-            if smart_api is None:
-                totp = pyotp.TOTP(TOTP_KEY).now()
-                smart_api = SmartConnect(api_key=API_KEY)
-                data = smart_api.generateSession(CLIENT_ID, PASSWORD, totp)
-                if data['status'] and not tokens_loaded:
-                    fetch_correct_tokens(smart_api)
-                    valid_token_count = sum(1 for s in STOCKS if s.get("token"))
-                    if valid_token_count > 0:
-                        tokens_loaded = True
-                        print("✅ Tokens Loaded Successfully")
-                    else:
-                        print("⚠️ NO TOKENS FOUND. Retrying...")
-                        time.sleep(5)
-                        smart_api = None
-                        continue
-
-            if not tokens_loaded: time.sleep(1); continue
-
-            indices_results = {}
-            with ThreadPoolExecutor(max_workers=4) as executor:
-                futures = {executor.submit(get_single_ltp, smart_api, "NSE", ind["symbol"], ind["token"]): ind["name"] for ind in INDICES_LIST}
-                for future in futures:
-                    name = futures[future]
-                    data = future.result()
-                    if data:
-                        indices_results[name] = data
-
+            # --- LOGIC PROCESSING ---
+            # 1. Update Stock Prices in List
+            if TOKEN_MAP[token]["cat"] != "INDEX":
+                # Find stock in main list and update
+                for s in STOCKS:
+                    if s.get("token") == token:
+                        s["price"] = ltp
+                        break
+            
+            # 2. Update Indices & Calculate Logic
             bank_pct = -100.0; it_pct = -100.0; auto_pct = -100.0
+            
+            # Check all Indices status
+            nifty_obj = TOKEN_MAP.get("99926000") # Nifty 50
+            if nifty_obj and nifty_obj.get("price") > 0:
+                # Nifty Logic
+                op = nifty_obj.get("open", 0)
+                if op > 0:
+                    ans1_nifty = "POSITIVE ▲" if nifty_obj["price"] > op else "NEGATIVE ▼" # Vs Open
+            
+            # Calculate Sector %
+            for ind in INDICES_LIST:
+                t = ind["token"]
+                obj = TOKEN_MAP.get(t)
+                if obj and obj.get("price") > 0 and obj.get("open", 0) > 0:
+                    pct = ((obj["price"] - obj["open"]) / obj["open"]) * 100
+                    if ind["name"] == "BANKNIFTY": bank_pct = pct
+                    elif ind["name"] == "NIFTY_IT": it_pct = pct
+                    elif ind["name"] == "NIFTY_AUTO": auto_pct = pct
 
-            for name, data in indices_results.items():
-                ltp = float(data['ltp'])
-                close = float(data['close'])
-                open_price = float(data.get('open', data['close']))
-                
-                if open_price > 0:
-                    pct = ((ltp - open_price) / open_price) * 100
-                else:
-                    pct = 0.0
-                
-                if name == "NIFTY": ans1_nifty = "POSITIVE ▲" if ltp > close else "NEGATIVE ▼"
-                if name == "BANKNIFTY": bank_pct = pct
-                elif name == "NIFTY_IT": it_pct = pct
-                elif name == "NIFTY_AUTO": auto_pct = pct
-
-            if confirmed_winner is None:
+            # --- WINNER LOCK LOGIC (9:20 AM) ---
+            t_lock = datetime.strptime("09:20:00", "%H:%M:%S").time()
+            current_time = (datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)).time()
+            
+            # Only Lock if not already locked
+            if winning_sector_code == "ALL":
                 if current_time >= t_lock:
                     max_val = max(bank_pct, it_pct, auto_pct)
                     if max_val > 0:
-                        if max_val == bank_pct: confirmed_winner = "BANK"
-                        elif max_val == it_pct: confirmed_winner = "IT"
-                        elif max_val == auto_pct: confirmed_winner = "AUTO"
-                        if confirmed_winner:
-                            winning_sector_code = confirmed_winner
-                            ans2_sector = "BANKING" if confirmed_winner == "BANK" else "IT / TECH" if confirmed_winner == "IT" else "AUTO"
-                            save_state(confirmed_winner, winning_sector_code)
+                        if max_val == bank_pct: winning_sector_code = "BANK"
+                        elif max_val == it_pct: winning_sector_code = "IT"
+                        elif max_val == auto_pct: winning_sector_code = "AUTO"
+                        
+                        if winning_sector_code != "ALL":
+                            ans2_sector = "BANKING" if winning_sector_code == "BANK" else "IT / TECH" if winning_sector_code == "IT" else "AUTO"
+                            save_state(winning_sector_code, winning_sector_code)
                 else:
                     ans2_sector = "CALCULATING..."
             else:
-                winner_pct = -100.0
-                if confirmed_winner == "BANK": winner_pct = bank_pct
-                elif confirmed_winner == "IT": winner_pct = it_pct
-                elif confirmed_winner == "AUTO": winner_pct = auto_pct
+                # Safety Check: If Winner goes Negative, Reset
+                w_pct = -100
+                if winning_sector_code == "BANK": w_pct = bank_pct
+                elif winning_sector_code == "IT": w_pct = it_pct
+                elif winning_sector_code == "AUTO": w_pct = auto_pct
                 
-                if winner_pct < 0.0:
-                    confirmed_winner = None
+                if w_pct < 0:
                     winning_sector_code = "ALL"
                     ans2_sector = "RE-SCANNING..."
                     save_state(None, "ALL")
 
-            with ThreadPoolExecutor(max_workers=4) as executor:
-                stock_futures = {executor.submit(get_single_ltp, smart_api, "NSE", s["symbol"], s["token"]): s for s in STOCKS if s.get("token")}
-                for future in stock_futures:
-                    stock_obj = stock_futures[future]
-                    data = future.result()
-                    if data:
-                        live_data[stock_obj["token"]] = float(data['ltp'])
-                        stock_obj["price"] = live_data[stock_obj["token"]]
-            
-            # ✅ WEBSOCKET EMIT: Push data to all connected clients immediately
+            # --- PUSH DATA TO FRONTEND (INSTANT) ---
             socketio.emit('update_data', {
                 "status": market_status,
                 "ans1": ans1_nifty,
@@ -314,32 +211,78 @@ def start_engine():
                 "winner": winning_sector_code,
                 "stocks": STOCKS
             })
-            
-            time.sleep(1) # Refresh rate increased since we push data now
-        except Exception as e:
-            print(f"Engine Error: {e}")
-            smart_api = None; time.sleep(5)
 
-# Start background thread using Threading (compatible with SocketIO threading mode)
-t = threading.Thread(target=start_engine); t.daemon = True; t.start()
+def on_open(wsapp):
+    print(">>> Angel One WebSocket CONNECTED <<<")
+    # Subscribe to Tokens (Mode 1: LTP)
+    token_list = [{"exchangeType": 1, "tokens": [t]} for t in TOKEN_MAP.keys()]
+    # Note: ExchangeType 1 is NSE
+    if token_list:
+        sws.subscribe_correlation_id("Stream_1")
+        sws.subscribe(1, 1, token_list) # Mode 1 (LTP), Exchange 1 (NSE)
+
+def on_error(wsapp, error):
+    print(f"WebSocket Error: {error}")
+
+def on_close(wsapp):
+    print("WebSocket Closed. Reconnecting...")
+    # Auto Reconnect Logic can be added here if needed
+
+def init_angel_websocket():
+    global sws, smart_api, tokens_loaded, winning_sector_code, ans2_sector
+    
+    # 1. Login & Setup
+    try:
+        totp = pyotp.TOTP(TOTP_KEY).now()
+        smart_api = SmartConnect(api_key=API_KEY)
+        data = smart_api.generateSession(CLIENT_ID, PASSWORD, totp)
+        auth_token = data['data']['jwtToken']
+        feed_token = smart_api.getfeedToken()
+        
+        # 2. Fetch Tokens
+        fetch_correct_tokens(smart_api)
+        tokens_loaded = True
+
+        # 3. Load State
+        w, c = load_state()
+        winning_sector_code = c
+        if w: ans2_sector = "BANKING" if w == "BANK" else "IT / TECH" if w == "IT" else "AUTO"
+
+        # 4. Start WebSocket
+        sws = SmartWebSocketV2(auth_token, API_KEY, CLIENT_ID, feed_token)
+        sws.on_data = on_data
+        sws.on_open = on_open
+        sws.on_error = on_error
+        sws.on_close = on_close
+        sws.connect()
+        
+    except Exception as e:
+        print(f"Init Error: {e}")
+        time.sleep(10)
+        init_angel_websocket() # Retry
+
+# Keep-Alive Thread (For Render)
+def keep_alive():
+    while True:
+        time.sleep(300) # 5 Mins
+        if RENDER_URL:
+            try: requests.get(RENDER_URL); print("Ping Sent")
+            except: pass
+
+# Start Background Threads
+t_ws = threading.Thread(target=init_angel_websocket); t_ws.daemon = True; t_ws.start()
+t_ping = threading.Thread(target=keep_alive); t_ping.daemon = True; t_ping.start()
 
 # --- 5. ROUTES ---
 @app.route('/')
 def index():
-    current_data = live_data.copy()
-    for s in STOCKS:
-        if s.get("token"): s["price"] = current_data.get(s["token"], "WAIT...")
     return render_template_string(HTML_TEMPLATE, status=market_status, ans1=ans1_nifty, ans2=ans2_sector, stocks=STOCKS, winner=winning_sector_code)
 
 @app.route('/data')
 def data():
-    # Fallback endpoint if needed
-    current_data = live_data.copy()
-    for s in STOCKS:
-        if s.get("token"): s["price"] = current_data.get(s["token"], "WAIT...")
     return jsonify({"status": market_status, "ans1": ans1_nifty, "ans2": ans2_sector, "winner": winning_sector_code, "stocks": STOCKS})
 
-# --- 6. HTML TEMPLATE ---
+# --- 6. HTML TEMPLATE (EXACT SAME UI) ---
 HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="en">
 <head>
