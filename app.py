@@ -283,11 +283,9 @@ function applyFilter() {
         const cat = card.getAttribute('data-cat');
         let show = false;
         if (activeFilter === 'ALL') show = true;
-        else if (activeFilter === 'TODAY') {
+        else if (activeFilter === 'TODAY') show = true;
+        else if (activeFilter === 'AI') {
             if (currentWinner === 'ALL' || cat === currentWinner) show = true;
-        }
-        else if (activeFilter === 'DAILY') {
-            show = true; // Placeholder for "Today Stock" logic
         }
         if(show) card.classList.remove('hidden'); else card.classList.add('hidden');
     });
@@ -350,8 +348,8 @@ setInterval(fetchData, 2000);
 
 <div class="filter-bar">
     <div id="btn-ALL" class="chip active" onclick="filterStocks('ALL')">ALL STOCKS</div>
-    <div id="btn-TODAY" class="chip" onclick="filterStocks('TODAY')">🚀 AI PICK</div>
-    <div id="btn-DAILY" class="chip" onclick="filterStocks('DAILY')">📅 TODAY STOCK</div>
+    <div id="btn-TODAY" class="chip" onclick="filterStocks('TODAY')">TODAY STOCK</div>
+    <div id="btn-AI" class="chip" onclick="filterStocks('AI')">🚀 AI PICK</div>
 </div>
 
 <div class="market-list">
