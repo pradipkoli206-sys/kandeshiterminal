@@ -307,6 +307,7 @@ body {
     width: fit-content;
     display: flex; align-items: center; gap: 4px;
     transition: all 0.2s;
+    cursor: pointer;
 }
 .upload-btn:hover { background: var(--accent-blue); color: white; }
 
@@ -326,12 +327,13 @@ body {
     padding: 25px; border-radius: 20px; border: 1px solid var(--border);
     text-align: center; box-shadow: 0 20px 40px rgba(0,0,0,0.6);
     animation: popin 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    display: flex; flex-direction: column; gap: 15px;
 }
-.modal-title { font-size: 18px; font-weight: 800; color: var(--text-main); margin-bottom: 10px; }
+.modal-title { font-size: 18px; font-weight: 800; color: var(--text-main); margin-bottom: 5px; }
 .modal-close {
-    margin-top: 20px; background: var(--accent-red); color: white;
+    background: var(--accent-red); color: white;
     border: none; padding: 10px 24px; border-radius: 10px;
-    font-weight: 700; cursor: pointer;
+    font-weight: 700; cursor: pointer; width: 100%;
 }
 @keyframes popin { from { transform: scale(0.8); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 
@@ -364,6 +366,8 @@ body {
 <script>
 let currentWinner = "ALL";
 let activeFilter = "ALL";
+// --- NEW: Object to store uploaded images ---
+let stockImages = {};
 
 function filterStocks(type) {
     activeFilter = type;
@@ -399,11 +403,41 @@ function setActiveNav(el) {
     el.classList.add('active');
 }
 
+// --- NEW UPLOAD LOGIC ---
+// 1. Trigger the hidden file input when "Upload Chart" is clicked
+function triggerUpload(event, stockName) {
+    event.stopPropagation(); // Prevent popup from opening immediately
+    document.getElementById('file-input-' + stockName).click();
+}
+
+// 2. Handle file selection and store the image
+function handleFileSelect(input, stockName) {
+    if (input.files && input.files[0]) {
+        var reader = new FileReader();
+        reader.onload = function (e) {
+            stockImages[stockName] = e.target.result; // Store base64 image
+            alert("Chart uploaded successfully for " + stockName);
+        }
+        reader.readAsDataURL(input.files[0]);
+    }
+}
+
 // --- POPUP LOGIC ---
 function openCardPopup(stockName) {
     // Only open if in TODAY tab
     if(activeFilter === 'TODAY') {
         document.getElementById('popup-name').innerText = stockName;
+        
+        // --- NEW: Check if image exists and display it ---
+        const imgContainer = document.getElementById('popup-img-container');
+        imgContainer.innerHTML = ''; // Clear previous content
+        
+        if (stockImages[stockName]) {
+            imgContainer.innerHTML = '<img src="' + stockImages[stockName] + '" style="width: 100%; border-radius: 10px; border: 1px solid var(--border);">';
+        } else {
+            imgContainer.innerHTML = '<p style="color: var(--text-muted); font-size: 14px;">No chart uploaded yet.</p>';
+        }
+
         document.getElementById('modal-overlay').classList.remove('hidden');
     }
 }
@@ -480,10 +514,11 @@ setInterval(fetchData, 2000);
             <span class="st-name">{{ s.name }}</span>
             <span class="st-cat-tag">{{ s.cat }} SECTOR</span>
             
-            <div class="upload-btn hidden">
+            <div class="upload-btn hidden" onclick="triggerUpload(event, '{{ s.name }}')">
                 <span class="material-icons-outlined" style="font-size: 14px;">upload_file</span>
                 Upload Chart
             </div>
+            <input type="file" id="file-input-{{ s.name }}" style="display: none;" accept="image/*" onchange="handleFileSelect(this, '{{ s.name }}')">
 
         </div>
         <div class="st-price-box">
@@ -496,7 +531,9 @@ setInterval(fetchData, 2000);
 <div id="modal-overlay" class="modal-overlay hidden">
     <div class="modal-box">
         <div class="modal-title" id="popup-name">STOCK NAME</div>
-        <p style="color: var(--text-muted); font-size: 14px;">Chart Upload Window</p>
+        <div id="popup-img-container">
+            <p style="color: var(--text-muted); font-size: 14px;">Chart Upload Window</p>
+        </div>
         <button class="modal-close" onclick="closePopup()">CLOSE</button>
     </div>
 </div>
