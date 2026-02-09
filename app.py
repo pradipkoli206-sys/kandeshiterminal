@@ -3,6 +3,9 @@ import pyotp
 import time
 import threading
 import requests
+import asyncio
+import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from flask import Flask, render_template_string, jsonify
 from SmartApi import SmartConnect
@@ -23,6 +26,55 @@ ans2_sector = "LOADING..."
 winning_sector_code = "ALL"
 data_fetched_once = False
 tokens_loaded = False 
+
+# --- 1.1 MARKET HOLIDAYS LIST (2026) ---
+NSE_HOLIDAYS = [
+    "2026-01-26", # Republic Day
+    "2026-02-17", # Mahashivratri
+    "2026-03-04", # Holi
+    "2026-03-20", # Gudhi Padwa
+    "2026-04-03", # Good Friday
+    "2026-04-14", # Ambedkar Jayanti
+    "2026-05-01", # Maharashtra Day
+    "2026-08-15", # Independence Day
+    "2026-09-15", # Ganesh Chaturthi
+    "2026-10-02", # Gandhi Jayanti
+    "2026-10-02", # Gandhi Jayanti
+    "2026-10-20", # Dasara
+    "2026-11-08", # Diwali (Laxmi Pujan)
+    "2026-12-25"  # Christmas
+]
+
+# --- MEMORY SYSTEM (JSON FILE HANDLING) ---
+STATE_FILE = "trade_state.json"
+
+def save_state(winner, sector_code):
+    """Saves the locked winner to a file to survive restarts"""
+    try:
+        data = {
+            "date": str(datetime.now(timezone.utc).date()), # Universal date check
+            "winner": winner,
+            "code": sector_code
+        }
+        with open(STATE_FILE, "w") as f:
+            json.dump(data, f)
+        print(f"💾 MEMORY SAVED: {winner}")
+    except Exception as e:
+        print(f"Save Error: {e}")
+
+def load_state():
+    """Loads the winner from file if server restarts"""
+    try:
+        if os.path.exists(STATE_FILE):
+            with open(STATE_FILE, "r") as f:
+                data = json.load(f)
+                # Check if the data is from TODAY
+                if data.get("date") == str(datetime.now(timezone.utc).date()):
+                    print(f"♻️ MEMORY RESTORED: {data['winner']}")
+                    return data["winner"], data["code"]
+    except Exception as e:
+        print(f"Load Error: {e}")
+    return None, "ALL"
 
 # --- 2. STOCK CONFIGURATION ---
 TARGET_STOCKS = [
@@ -87,14 +139,29 @@ def fetch_correct_tokens(smart_api):
     STOCKS = temp_stocks
     print(">>> SCAN COMPLETE <<<\n")
 
-# --- 4. ENGINE (With 9:15 Accurate Logic) ---
+# --- 4. ENGINE (Multi-Threading & Async Logic) ---
+def get_single_ltp(smart_api, exchange, symbol, token):
+    # ✅ RETRY LOGIC ADDED: Try 3 Times
+    for i in range(3):
+        try:
+            res = smart_api.ltpData(exchange, symbol, token)
+            if res and res['status']:
+                return res['data']
+        except:
+            time.sleep(0.1) # Wait 0.1s before retry
+    return None
+
 def start_engine():
-    global live_data, market_status, ans1_nifty, ans2_sector, winning_sector_code, data_fetched_once, tokens_loaded
+    global live_data, market_status, ans1_nifty, ans2_sector, winning_sector_code, tokens_loaded
     smart_api = None
     last_ping_time = time.time()
     
-    # Accurate Logic Variables
-    confirmed_winner = None
+    # ✅ RESTORE STATE ON STARTUP
+    confirmed_winner, loaded_code = load_state()
+    winning_sector_code = loaded_code
+    if confirmed_winner:
+        ans2_sector = "BANKING" if confirmed_winner == "BANK" else "IT / TECH" if confirmed_winner == "IT" else "AUTO"
+    
     tick_count = 0
     sector_points = {"BANK": 0, "IT": 0, "AUTO": 0}
 
@@ -103,19 +170,39 @@ def start_engine():
             utc_now = datetime.now(timezone.utc)
             ist_now = utc_now + timedelta(hours=5, minutes=30)
             current_time = ist_now.time()
+            today_str = str(ist_now.date()) # Get today's date
             is_weekday = ist_now.weekday() < 5
             
+            # --- HOLIDAY CHECK (Comment this out if testing on a Holiday) ---
+            if today_str in NSE_HOLIDAYS:
+                market_status = "HOLIDAY"
+                ans1_nifty = "HOLIDAY"
+                ans2_sector = "MARKET CLOSED"
+                time.sleep(60) # १ मिनिट थांबा (CPU वाचवण्यासाठी)
+                continue
+
             t915 = datetime.strptime("09:15", "%H:%M").time()
+            
+            # ✅ UPDATED: Lock Time set to 09:20:00 to avoid Market Noise/Volume Traps
+            t_lock = datetime.strptime("09:20:00", "%H:%M:%S").time() 
+            
+            t1530 = datetime.strptime("15:30", "%H:%M").time()
             t1535 = datetime.strptime("15:35", "%H:%M").time()
             t0900 = datetime.strptime("09:00", "%H:%M").time()
 
-            # रोज सकाळी ९:०० ला रिसेट
             if t0900 <= current_time < t915:
+                # 9:00 AM Reset Logic (Clear Memory for New Day)
+                if confirmed_winner is not None:
+                    save_state(None, "ALL") 
                 confirmed_winner = None
                 tick_count = 0
                 sector_points = {"BANK": 0, "IT": 0, "AUTO": 0}
+                ans2_sector = "WAIT FOR 9:15"
+                winning_sector_code = "ALL"
 
-            is_market_active = is_weekday and (t915 <= current_time <= t1535)
+            # ✅ TEST MODE ON: Time restriction removed for testing
+            # Original: is_market_active = is_weekday and (t915 <= current_time <= t1535)
+            is_market_active = True 
 
             if time.time() - last_ping_time > 600:
                 if RENDER_URL:
@@ -124,7 +211,7 @@ def start_engine():
                 last_ping_time = time.time()
 
             if not is_market_active:
-                market_status = "CLOSED"; time.sleep(60); continue 
+                market_status = "CLOSED"; time.sleep(30); continue 
 
             market_status = "LIVE"
 
@@ -133,60 +220,98 @@ def start_engine():
                 smart_api = SmartConnect(api_key=API_KEY)
                 data = smart_api.generateSession(CLIENT_ID, PASSWORD, totp)
                 if data['status'] and not tokens_loaded:
-                    fetch_correct_tokens(smart_api); tokens_loaded = True
+                    fetch_correct_tokens(smart_api)
+                    
+                    # ✅ NEW TOKEN VERIFICATION LOGIC
+                    # Check if any stock has a valid token
+                    valid_token_count = sum(1 for s in STOCKS if s.get("token"))
+                    
+                    if valid_token_count > 0:
+                        tokens_loaded = True
+                        print("✅ Tokens Loaded Successfully")
+                    else:
+                        print("⚠️ NO TOKENS FOUND (NET/API ISSUE). Retrying in 5s...")
+                        time.sleep(5)
+                        smart_api = None # Reset session to try fresh
+                        continue
 
             if not tokens_loaded: time.sleep(1); continue
 
+            indices_results = {}
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                futures = {executor.submit(get_single_ltp, smart_api, "NSE", ind["symbol"], ind["token"]): ind["name"] for ind in INDICES_LIST}
+                for future in futures:
+                    name = futures[future]
+                    data = future.result()
+                    if data:
+                        indices_results[name] = data
+
             bank_pct = -100.0; it_pct = -100.0; auto_pct = -100.0
 
-            # १. Pre-Open Comparison & Sustainability (Indice Data)
-            for ind in INDICES_LIST:
-                try:
-                    res = smart_api.ltpData("NSE", ind["symbol"], ind["token"])
-                    if res and res['status']:
-                        ltp = float(res['data']['ltp']); close = float(res['data']['close'])
-                        pct = ((ltp - close) / close) * 100
-                        if ind["name"] == "NIFTY": ans1_nifty = "POSITIVE ▲" if ltp > close else "NEGATIVE ▼"
-                        if ind["name"] == "BANKNIFTY": bank_pct = pct
-                        elif ind["name"] == "NIFTY_IT": it_pct = pct
-                        elif ind["name"] == "NIFTY_AUTO": auto_pct = pct
-                except: pass
-                time.sleep(0.3)
+            for name, data in indices_results.items():
+                ltp = float(data['ltp'])
+                close = float(data['close'])
+                
+                # ✅ NEW LOGIC: Use OPEN Price for Percentage Calculation (Intraday Safety)
+                open_price = float(data.get('open', data['close'])) # Fallback to close if open missing
+                
+                # Calculate Change from Today's Open
+                if open_price > 0:
+                    pct = ((ltp - open_price) / open_price) * 100
+                else:
+                    pct = 0.0
+                
+                # Nifty display comparison (Direction vs Previous Close is standard for trend display)
+                if name == "NIFTY": ans1_nifty = "POSITIVE ▲" if ltp > close else "NEGATIVE ▼"
+                
+                # But Sectors use the Intraday (Open) Percentage for Decision Making
+                if name == "BANKNIFTY": bank_pct = pct
+                elif name == "NIFTY_IT": it_pct = pct
+                elif name == "NIFTY_AUTO": auto_pct = pct
 
-            # २. Volume Surge & Sustainability Point System (पहिल्या १ मिनिटासाठी)
+            # --- UPDATED LOCKING & PROTECTION LOGIC ---
             if confirmed_winner is None:
-                current_winner = "ALL"
-                max_val = max(bank_pct, it_pct, auto_pct)
-                if max_val > 0.05: # Positive Rally Check
-                    if max_val == bank_pct: current_winner = "BANK"
-                    elif max_val == it_pct: current_winner = "IT"
-                    elif max_val == auto_pct: current_winner = "AUTO"
-                
-                if current_winner != "ALL":
-                    sector_points[current_winner] += 1
-                
-                tick_count += 1
-                
-                # सलग ३० सेकंद (सुमारे १० टिक्स) ताकद टिकली तरच लॉकींग
-                if tick_count >= 10:
-                    final_choice = max(sector_points, key=sector_points.get)
-                    if sector_points[final_choice] > 5:
-                        confirmed_winner = final_choice
-                        winning_sector_code = final_choice
-                        ans2_sector = "BANKING" if final_choice == "BANK" else "IT / TECH" if final_choice == "IT" else "AUTO"
-
-            # ३. Stock Price Updates
-            for stock in STOCKS:
-                if stock.get("token"):
-                    try:
-                        res = smart_api.ltpData("NSE", stock["symbol"], stock["token"])
-                        if res and res['status']:
-                            live_data[stock["token"]] = float(res['data']['ltp'])
-                            stock["price"] = live_data[stock["token"]]
-                    except: pass
-                time.sleep(0.4)
+                # ०९:२०:०० नंतर विजेता निवडून लॉक करणे (Volume/Noise Stability)
+                if current_time >= t_lock:
+                    max_val = max(bank_pct, it_pct, auto_pct)
+                    if max_val > 0: # Positive sector check (vs Open)
+                        if max_val == bank_pct: confirmed_winner = "BANK"
+                        elif max_val == it_pct: confirmed_winner = "IT"
+                        elif max_val == auto_pct: confirmed_winner = "AUTO"
+                        
+                        if confirmed_winner:
+                            winning_sector_code = confirmed_winner
+                            ans2_sector = "BANKING" if confirmed_winner == "BANK" else "IT / TECH" if confirmed_winner == "IT" else "AUTO"
+                            # ✅ SAVE LOCK TO MEMORY
+                            save_state(confirmed_winner, winning_sector_code)
+                else:
+                    ans2_sector = "CALCULATING..."
             
-            time.sleep(1)
+            else:
+                # Protection against Noise
+                winner_pct = -100.0
+                if confirmed_winner == "BANK": winner_pct = bank_pct
+                elif confirmed_winner == "IT": winner_pct = it_pct
+                elif confirmed_winner == "AUTO": winner_pct = auto_pct
+                
+                # जर विजेता खरोखर निगेटिव्ह मध्ये गेला (Open Price च्या खाली), तरच लॉक रिसेट करणे
+                if winner_pct < 0.0:
+                    confirmed_winner = None
+                    winning_sector_code = "ALL"
+                    ans2_sector = "RE-SCANNING..."
+                    # ✅ RESET MEMORY
+                    save_state(None, "ALL")
+
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                stock_futures = {executor.submit(get_single_ltp, smart_api, "NSE", s["symbol"], s["token"]): s for s in STOCKS if s.get("token")}
+                for future in stock_futures:
+                    stock_obj = stock_futures[future]
+                    data = future.result()
+                    if data:
+                        live_data[stock_obj["token"]] = float(data['ltp'])
+                        stock_obj["price"] = live_data[stock_obj["token"]]
+            
+            time.sleep(2)
         except:
             smart_api = None; time.sleep(5)
 
@@ -195,17 +320,21 @@ t = threading.Thread(target=start_engine); t.daemon = True; t.start()
 # --- 5. ROUTES ---
 @app.route('/')
 def index():
+    # ✅ FIX: Create a shallow copy of live_data to prevent RuntimeError during iteration
+    current_data = live_data.copy()
     for s in STOCKS:
-        if s.get("token"): s["price"] = live_data.get(s["token"], "WAIT...")
-    return render_template_string(HTML_TEMPLATE, status=market_status, ans1=ans1_nifty, ans2=ans2_sector, stocks=STOCKS)
+        if s.get("token"): s["price"] = current_data.get(s["token"], "WAIT...")
+    return render_template_string(HTML_TEMPLATE, status=market_status, ans1=ans1_nifty, ans2=ans2_sector, stocks=STOCKS, winner=winning_sector_code)
 
 @app.route('/data')
 def data():
+    # ✅ FIX: Create a shallow copy of live_data to prevent RuntimeError during iteration
+    current_data = live_data.copy()
     for s in STOCKS:
-        if s.get("token"): s["price"] = live_data.get(s["token"], "WAIT...")
+        if s.get("token"): s["price"] = current_data.get(s["token"], "WAIT...")
     return jsonify({"status": market_status, "ans1": ans1_nifty, "ans2": ans2_sector, "winner": winning_sector_code, "stocks": STOCKS})
 
-# --- 6. HTML TEMPLATE (TOTALLY UNCHANGED UI) ---
+# --- 6. HTML TEMPLATE ---
 HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -350,10 +479,18 @@ body {
 }
 .modal-title { font-size: 18px; font-weight: 800; color: var(--text-main); margin-bottom: 5px; }
 .modal-close {
-    background: var(--accent-red); color: white;
+    background: var(--accent-blue); color: white;
     border: none; padding: 10px 24px; border-radius: 10px;
     font-weight: 700; cursor: pointer; width: 100%;
 }
+/* DELETE BUTTON STYLE (ADDED TO MATCH THEME) */
+.modal-delete {
+    background: transparent; color: var(--accent-red);
+    border: 1px solid var(--accent-red); padding: 8px 24px; border-radius: 10px;
+    font-weight: 700; cursor: pointer; width: 100%; font-size: 12px;
+}
+.modal-delete:hover { background: rgba(255, 69, 96, 0.1); }
+
 @keyframes popin { from { transform: scale(0.8); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 
 /* --- BOTTOM NAVIGATION (Modern) --- */
@@ -383,9 +520,20 @@ body {
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; }
 </style>
 <script>
-let currentWinner = "ALL";
+// ✅ FIX: Initialize with Server Variable immediately
+let currentWinner = "{{ winner }}";
 let activeFilter = "ALL";
 let stockImages = {};
+
+// --- LOCAL STORAGE LOGIC ---
+function loadImagesFromStorage() {
+    const cards = document.querySelectorAll('.stock-card');
+    cards.forEach(card => {
+        const name = card.querySelector('.st-name').innerText;
+        const saved = localStorage.getItem('chart_' + name);
+        if(saved) stockImages[name] = saved;
+    });
+}
 
 function filterStocks(type) {
     activeFilter = type;
@@ -431,21 +579,49 @@ function handleFileSelect(input, stockName) {
         var reader = new FileReader();
         reader.onload = function (e) {
             stockImages[stockName] = e.target.result;
-            alert("Chart uploaded successfully for " + stockName);
+            // SAVE TO LOCAL STORAGE
+            try {
+                localStorage.setItem('chart_' + stockName, e.target.result);
+                alert("Chart saved to memory!");
+            } catch (err) {
+                alert("Image too big to save. Try a screenshot.");
+            }
         }
         reader.readAsDataURL(input.files[0]);
     }
 }
 
+// --- DELETE FUNCTION ---
+function deleteChart(stockName) {
+    if(confirm("Are you sure you want to delete this chart?")) {
+        localStorage.removeItem('chart_' + stockName);
+        delete stockImages[stockName];
+        closePopup();
+        alert("Chart deleted.");
+    }
+}
+
 function openCardPopup(stockName) {
+    // Ensure we have the latest data from storage
+    const saved = localStorage.getItem('chart_' + stockName);
+    if(saved) stockImages[stockName] = saved;
+
     if(activeFilter === 'TODAY') {
         document.getElementById('popup-name').innerText = stockName;
         const imgContainer = document.getElementById('popup-img-container');
+        const delBtn = document.getElementById('popup-delete-btn');
+        
         imgContainer.innerHTML = '';
+        
         if (stockImages[stockName]) {
             imgContainer.innerHTML = '<img src="' + stockImages[stockName] + '" style="width: 100%; border-radius: 10px; border: 1px solid var(--border);">';
+            // Show Delete Button
+            delBtn.classList.remove('hidden');
+            delBtn.onclick = function() { deleteChart(stockName); };
         } else {
             imgContainer.innerHTML = '<p style="color: var(--text-muted); font-size: 14px;">No chart uploaded yet.</p>';
+            // Hide Delete Button
+            delBtn.classList.add('hidden');
         }
         document.getElementById('modal-overlay').classList.remove('hidden');
     }
@@ -487,6 +663,11 @@ function fetchData() {
         applyFilter();
     });
 }
+
+// Initial Load
+window.onload = function() {
+    loadImagesFromStorage();
+};
 setInterval(fetchData, 2000);
 </script>
 </head>
@@ -539,6 +720,7 @@ setInterval(fetchData, 2000);
         <div id="popup-img-container">
             <p style="color: var(--text-muted); font-size: 14px;">Chart Upload Window</p>
         </div>
+        <button id="popup-delete-btn" class="modal-delete hidden">DELETE CHART</button>
         <button class="modal-close" onclick="closePopup()">CLOSE</button>
     </div>
 </div>
