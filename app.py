@@ -9,8 +9,12 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from flask import Flask, render_template_string, jsonify
 from SmartApi import SmartConnect
+from flask_socketio import SocketIO, emit
 
 app = Flask(__name__)
+app.config['SECRET_KEY'] = 'secret_key_for_websocket'
+# WebSocket Initialization (Threading mode used for compatibility)
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # --- 1. KEYS (UNTOUCHED) ---
 API_KEY = os.environ.get("API_KEY")
@@ -173,25 +177,29 @@ def start_engine():
             today_str = str(ist_now.date()) # Get today's date
             is_weekday = ist_now.weekday() < 5
             
-            # --- HOLIDAY CHECK (Comment this out if testing on a Holiday) ---
+            # --- HOLIDAY CHECK ---
             if today_str in NSE_HOLIDAYS:
                 market_status = "HOLIDAY"
                 ans1_nifty = "HOLIDAY"
                 ans2_sector = "MARKET CLOSED"
-                time.sleep(60) # १ मिनिट थांबा (CPU वाचवण्यासाठी)
+                
+                # Emit holiday status via Websocket
+                socketio.emit('update_data', {
+                    "status": market_status, "ans1": ans1_nifty, 
+                    "ans2": ans2_sector, "winner": winning_sector_code, "stocks": STOCKS
+                })
+                
+                time.sleep(60)
                 continue
 
             t915 = datetime.strptime("09:15", "%H:%M").time()
-            
-            # ✅ UPDATED: Lock Time set to 09:20:00 to avoid Market Noise/Volume Traps
             t_lock = datetime.strptime("09:20:00", "%H:%M:%S").time() 
-            
             t1530 = datetime.strptime("15:30", "%H:%M").time()
             t1535 = datetime.strptime("15:35", "%H:%M").time()
             t0900 = datetime.strptime("09:00", "%H:%M").time()
 
             if t0900 <= current_time < t915:
-                # 9:00 AM Reset Logic (Clear Memory for New Day)
+                # 9:00 AM Reset Logic
                 if confirmed_winner is not None:
                     save_state(None, "ALL") 
                 confirmed_winner = None
@@ -200,8 +208,7 @@ def start_engine():
                 ans2_sector = "WAIT FOR 9:15"
                 winning_sector_code = "ALL"
 
-            # ✅ TEST MODE ON: Time restriction removed for testing
-            # Original: is_market_active = is_weekday and (t915 <= current_time <= t1535)
+            # ✅ TEST MODE ON
             is_market_active = True 
 
             if time.time() - last_ping_time > 600:
@@ -211,7 +218,13 @@ def start_engine():
                 last_ping_time = time.time()
 
             if not is_market_active:
-                market_status = "CLOSED"; time.sleep(30); continue 
+                market_status = "CLOSED"
+                socketio.emit('update_data', {
+                    "status": market_status, "ans1": ans1_nifty, 
+                    "ans2": ans2_sector, "winner": winning_sector_code, "stocks": STOCKS
+                })
+                time.sleep(30)
+                continue 
 
             market_status = "LIVE"
 
@@ -221,18 +234,14 @@ def start_engine():
                 data = smart_api.generateSession(CLIENT_ID, PASSWORD, totp)
                 if data['status'] and not tokens_loaded:
                     fetch_correct_tokens(smart_api)
-                    
-                    # ✅ NEW TOKEN VERIFICATION LOGIC
-                    # Check if any stock has a valid token
                     valid_token_count = sum(1 for s in STOCKS if s.get("token"))
-                    
                     if valid_token_count > 0:
                         tokens_loaded = True
                         print("✅ Tokens Loaded Successfully")
                     else:
-                        print("⚠️ NO TOKENS FOUND (NET/API ISSUE). Retrying in 5s...")
+                        print("⚠️ NO TOKENS FOUND. Retrying...")
                         time.sleep(5)
-                        smart_api = None # Reset session to try fresh
+                        smart_api = None
                         continue
 
             if not tokens_loaded: time.sleep(1); continue
@@ -251,55 +260,41 @@ def start_engine():
             for name, data in indices_results.items():
                 ltp = float(data['ltp'])
                 close = float(data['close'])
+                open_price = float(data.get('open', data['close']))
                 
-                # ✅ NEW LOGIC: Use OPEN Price for Percentage Calculation (Intraday Safety)
-                open_price = float(data.get('open', data['close'])) # Fallback to close if open missing
-                
-                # Calculate Change from Today's Open
                 if open_price > 0:
                     pct = ((ltp - open_price) / open_price) * 100
                 else:
                     pct = 0.0
                 
-                # Nifty display comparison (Direction vs Previous Close is standard for trend display)
                 if name == "NIFTY": ans1_nifty = "POSITIVE ▲" if ltp > close else "NEGATIVE ▼"
-                
-                # But Sectors use the Intraday (Open) Percentage for Decision Making
                 if name == "BANKNIFTY": bank_pct = pct
                 elif name == "NIFTY_IT": it_pct = pct
                 elif name == "NIFTY_AUTO": auto_pct = pct
 
-            # --- UPDATED LOCKING & PROTECTION LOGIC ---
             if confirmed_winner is None:
-                # ०९:२०:०० नंतर विजेता निवडून लॉक करणे (Volume/Noise Stability)
                 if current_time >= t_lock:
                     max_val = max(bank_pct, it_pct, auto_pct)
-                    if max_val > 0: # Positive sector check (vs Open)
+                    if max_val > 0:
                         if max_val == bank_pct: confirmed_winner = "BANK"
                         elif max_val == it_pct: confirmed_winner = "IT"
                         elif max_val == auto_pct: confirmed_winner = "AUTO"
-                        
                         if confirmed_winner:
                             winning_sector_code = confirmed_winner
                             ans2_sector = "BANKING" if confirmed_winner == "BANK" else "IT / TECH" if confirmed_winner == "IT" else "AUTO"
-                            # ✅ SAVE LOCK TO MEMORY
                             save_state(confirmed_winner, winning_sector_code)
                 else:
                     ans2_sector = "CALCULATING..."
-            
             else:
-                # Protection against Noise
                 winner_pct = -100.0
                 if confirmed_winner == "BANK": winner_pct = bank_pct
                 elif confirmed_winner == "IT": winner_pct = it_pct
                 elif confirmed_winner == "AUTO": winner_pct = auto_pct
                 
-                # जर विजेता खरोखर निगेटिव्ह मध्ये गेला (Open Price च्या खाली), तरच लॉक रिसेट करणे
                 if winner_pct < 0.0:
                     confirmed_winner = None
                     winning_sector_code = "ALL"
                     ans2_sector = "RE-SCANNING..."
-                    # ✅ RESET MEMORY
                     save_state(None, "ALL")
 
             with ThreadPoolExecutor(max_workers=4) as executor:
@@ -311,16 +306,26 @@ def start_engine():
                         live_data[stock_obj["token"]] = float(data['ltp'])
                         stock_obj["price"] = live_data[stock_obj["token"]]
             
-            time.sleep(2)
-        except:
+            # ✅ WEBSOCKET EMIT: Push data to all connected clients immediately
+            socketio.emit('update_data', {
+                "status": market_status,
+                "ans1": ans1_nifty,
+                "ans2": ans2_sector,
+                "winner": winning_sector_code,
+                "stocks": STOCKS
+            })
+            
+            time.sleep(1) # Refresh rate increased since we push data now
+        except Exception as e:
+            print(f"Engine Error: {e}")
             smart_api = None; time.sleep(5)
 
+# Start background thread using Threading (compatible with SocketIO threading mode)
 t = threading.Thread(target=start_engine); t.daemon = True; t.start()
 
 # --- 5. ROUTES ---
 @app.route('/')
 def index():
-    # ✅ FIX: Create a shallow copy of live_data to prevent RuntimeError during iteration
     current_data = live_data.copy()
     for s in STOCKS:
         if s.get("token"): s["price"] = current_data.get(s["token"], "WAIT...")
@@ -328,7 +333,7 @@ def index():
 
 @app.route('/data')
 def data():
-    # ✅ FIX: Create a shallow copy of live_data to prevent RuntimeError during iteration
+    # Fallback endpoint if needed
     current_data = live_data.copy()
     for s in STOCKS:
         if s.get("token"): s["price"] = current_data.get(s["token"], "WAIT...")
@@ -342,6 +347,7 @@ HTML_TEMPLATE = '''<!DOCTYPE html>
 <title>AI TRADER PRO</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
 <style>
 /* --- MODERN DARK THEME VARIABLES --- */
 :root {
@@ -602,7 +608,6 @@ function deleteChart(stockName) {
 }
 
 function openCardPopup(stockName) {
-    // Ensure we have the latest data from storage
     const saved = localStorage.getItem('chart_' + stockName);
     if(saved) stockImages[stockName] = saved;
 
@@ -615,12 +620,10 @@ function openCardPopup(stockName) {
         
         if (stockImages[stockName]) {
             imgContainer.innerHTML = '<img src="' + stockImages[stockName] + '" style="width: 100%; border-radius: 10px; border: 1px solid var(--border);">';
-            // Show Delete Button
             delBtn.classList.remove('hidden');
             delBtn.onclick = function() { deleteChart(stockName); };
         } else {
             imgContainer.innerHTML = '<p style="color: var(--text-muted); font-size: 14px;">No chart uploaded yet.</p>';
-            // Hide Delete Button
             delBtn.classList.add('hidden');
         }
         document.getElementById('modal-overlay').classList.remove('hidden');
@@ -631,44 +634,56 @@ function closePopup() {
     document.getElementById('modal-overlay').classList.add('hidden');
 }
 
-function fetchData() {
-    fetch('/data')
-    .then(response => response.json())
-    .then(data => {
-        document.getElementById('status-text').innerText = data.status;
-        const ans1 = document.getElementById('ans1-disp');
-        ans1.innerHTML = data.ans1;
-        if(data.ans1.includes("POSITIVE")) ans1.className = "summary-value txt-green";
-        else if(data.ans1.includes("NEGATIVE")) ans1.className = "summary-value txt-red";
-        else ans1.className = "summary-value loading-pulse";
+// ✅ NEW: WEBSOCKET LOGIC (Replaces setInterval)
+var socket = io();
 
-        const ans2 = document.getElementById('ans2-disp');
-        ans2.innerText = data.ans2;
-        if(data.ans2 !== "LOADING...") ans2.className = "summary-value txt-blue";
-        else ans2.className = "summary-value loading-pulse";
-        
-        currentWinner = data.winner;
-        data.stocks.forEach(s => {
-            const priceEl = document.getElementById('price-' + s.name);
-            if(priceEl) {
-                if(s.price === "WAIT..." || s.price === "0.00" || s.price === "ERR") {
-                     priceEl.innerText = s.price;
-                     priceEl.className = "st-wait loading-pulse";
-                } else {
-                    priceEl.innerText = "₹" + s.price;
-                    priceEl.className = "st-price";
-                }
+socket.on('connect', function() {
+    console.log("Connected to Server via WebSocket");
+    document.getElementById('status-text').innerText = "LIVE SOCKET";
+});
+
+socket.on('update_data', function(data) {
+    // 1. Update Status Text
+    document.getElementById('status-text').innerText = data.status;
+
+    // 2. Update ans1 (Nifty)
+    const ans1 = document.getElementById('ans1-disp');
+    ans1.innerHTML = data.ans1;
+    if(data.ans1.includes("POSITIVE")) ans1.className = "summary-value txt-green";
+    else if(data.ans1.includes("NEGATIVE")) ans1.className = "summary-value txt-red";
+    else ans1.className = "summary-value loading-pulse";
+
+    // 3. Update ans2 (Sector)
+    const ans2 = document.getElementById('ans2-disp');
+    ans2.innerText = data.ans2;
+    if(data.ans2 !== "LOADING...") ans2.className = "summary-value txt-blue";
+    else ans2.className = "summary-value loading-pulse";
+    
+    // 4. Update Global Winner Variable & Filter
+    currentWinner = data.winner;
+    
+    // 5. Update Stock Prices
+    data.stocks.forEach(s => {
+        const priceEl = document.getElementById('price-' + s.name);
+        if(priceEl) {
+            if(s.price === "WAIT..." || s.price === "0.00" || s.price === "ERR") {
+                 priceEl.innerText = s.price;
+                 priceEl.className = "st-wait loading-pulse";
+            } else {
+                priceEl.innerText = "₹" + s.price;
+                priceEl.className = "st-price";
             }
-        });
-        applyFilter();
+        }
     });
-}
+
+    // Re-apply filter to update visibility if winner changed
+    applyFilter();
+});
 
 // Initial Load
 window.onload = function() {
     loadImagesFromStorage();
 };
-setInterval(fetchData, 2000);
 </script>
 </head>
 <body>
@@ -750,4 +765,5 @@ setInterval(fetchData, 2000);
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    # ✅ SOCKETIO RUN (Not app.run)
+    socketio.run(app, host='0.0.0.0', port=port)
