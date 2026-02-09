@@ -2,7 +2,7 @@ import os
 import pyotp
 import time
 import threading
-import requests
+import requests # 1. हे नवीन ऍड केले आहे (वेबसाईट झोपू नये म्हणून)
 from datetime import datetime, timedelta, timezone
 from flask import Flask, render_template_string, jsonify
 from SmartApi import SmartConnect
@@ -14,7 +14,7 @@ API_KEY = os.environ.get("API_KEY")
 CLIENT_ID = os.environ.get("CLIENT_ID")
 PASSWORD = os.environ.get("PASSWORD")
 TOTP_KEY = os.environ.get("TOTP_KEY")
-RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL")
+RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL") # 2. रेंडरची लिंक घेण्यासाठी
 
 live_data = {} 
 market_status = "CHECKING..."
@@ -24,7 +24,7 @@ winning_sector_code = "ALL"
 data_fetched_once = False
 tokens_loaded = False 
 
-# --- 2. STOCK CONFIGURATION ---
+# --- 2. STOCK CONFIGURATION (UNTOUCHED) ---
 TARGET_STOCKS = [
     {"name": "SOUTHBANK", "cat": "BANK"},
     {"name": "CENTRALBK", "cat": "BANK"},
@@ -43,10 +43,9 @@ INDICES_LIST = [
     {"name": "NIFTY_AUTO", "token": "99926002", "symbol": "Nifty Auto"}
 ]
 
-# *** FIX: सुरुवातीलाच लिस्ट भरा म्हणजे स्क्रीन रिकामी दिसणार नाही ***
-STOCKS = [{"name": s["name"], "cat": s["cat"], "token": None, "price": "WAIT...", "symbol": s["name"]} for s in TARGET_STOCKS]
+STOCKS = []
 
-# --- 3. AUTO-SCANNER ---
+# --- 3. AUTO-SCANNER (UNTOUCHED - SAFE MODE) ---
 def fetch_correct_tokens(smart_api):
     global STOCKS
     print("\n>>> STARTING NSE TOKEN SCANNER (SAFE MODE) <<<")
@@ -84,29 +83,31 @@ def fetch_correct_tokens(smart_api):
                 temp_stocks.append({"name": name, "token": None, "cat": cat, "price": "ERR"})
         except:
             temp_stocks.append({"name": name, "token": None, "cat": cat, "price": "ERR"})
-    
-    # अपडेट झाल्यावर जुन्या लिस्टला नवीन डेटाने बदला
     STOCKS = temp_stocks
     print(">>> SCAN COMPLETE <<<\n")
 
-# --- 4. ENGINE ---
+# --- 4. ENGINE (MARKET TIME + KEEP ALIVE ADDED) ---
 def start_engine():
     global live_data, market_status, ans1_nifty, ans2_sector, winning_sector_code, data_fetched_once, tokens_loaded
     smart_api = None
-    last_ping_time = time.time()
+    last_ping_time = time.time() # 3. हे टाइमर आहे (वेबसाईट चालू ठेवण्यासाठी)
 
     while True:
         try:
+            # --- 4. MARKET TIME CHECK ---
             utc_now = datetime.now(timezone.utc)
             ist_now = utc_now + timedelta(hours=5, minutes=30)
             current_time = ist_now.time()
-            is_weekday = ist_now.weekday() < 5
+            is_weekday = ist_now.weekday() < 5 # सोमवार ते शुक्रवार
             
+            # मार्केट वेळ: सकाळी 09:00 ते दुपारी 03:35
             market_open = datetime.strptime("09:00", "%H:%M").time()
             market_close = datetime.strptime("15:35", "%H:%M").time()
             
             is_market_active = is_weekday and (market_open <= current_time <= market_close)
 
+            # --- 5. KEEP ALIVE LOGIC (PING) ---
+            # दर १० मिनिटांनी (६०० सेकंद) वेबसाईटला स्वतः पिंग करा
             if time.time() - last_ping_time > 600:
                 if RENDER_URL:
                     try:
@@ -116,13 +117,15 @@ def start_engine():
                         pass
                 last_ping_time = time.time()
 
+            # जर मार्केट बंद असेल, तर डेटा फेच करू नका (फक्त झोपा)
             if not is_market_active:
                 market_status = "CLOSED"
-                time.sleep(60)
+                time.sleep(60) # १ मिनिट थांबा
                 continue 
 
             market_status = "LIVE"
 
+            # --- 6. ORIGINAL LOGIC (UNTOUCHED) ---
             if smart_api is None:
                 totp = pyotp.TOTP(TOTP_KEY).now()
                 smart_api = SmartConnect(api_key=API_KEY)
@@ -148,7 +151,7 @@ def start_engine():
                 time.sleep(0.3)
 
             for stock in STOCKS:
-                if stock.get("token"):
+                if stock["token"]:
                     try:
                         res = smart_api.ltpData("NSE", stock["symbol"], stock["token"])
                         if res and res['status']:
@@ -175,50 +178,44 @@ t = threading.Thread(target=start_engine); t.daemon = True; t.start()
 # --- 5. ROUTES ---
 @app.route('/')
 def index():
-    # डेटा अपडेट करा
     for s in STOCKS:
-        if s.get("token"): s["price"] = live_data.get(s["token"], "WAIT...")
+        if s["token"]: s["price"] = live_data.get(s["token"], "0.00")
     return render_template_string(HTML_TEMPLATE, status=market_status, ans1=ans1_nifty, ans2=ans2_sector, stocks=STOCKS)
 
 @app.route('/data')
 def data():
     for s in STOCKS:
-        if s.get("token"): s["price"] = live_data.get(s["token"], "WAIT...")
+        if s["token"]: s["price"] = live_data.get(s["token"], "0.00")
     return jsonify({"status": market_status, "ans1": ans1_nifty, "ans2": ans2_sector, "winner": winning_sector_code, "stocks": STOCKS})
 
-# --- 6. NEW MODERN TRADING DASHBOARD HTML ---
+# --- 6. NEW PREMIUM DESIGN (HTML/CSS) ---
 HTML_TEMPLATE = '''<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AI TRADER PRO</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
 <style>
-/* --- MODERN DARK THEME VARIABLES --- */
+/* --- PREMIUM THEME --- */
 :root {
-    --bg-main: #0a0e17;      /* Deep Dark Background */
-    --bg-card: #151a25;      /* Slightly Lighter Card BG */
-    --text-main: #ffffff;    /* Pure White Text */
-    --text-muted: #8b9bb4;   /* Muted Text for Labels */
-    --border: #2a3441;       /* Subtle Borders */
-    --accent-blue: #3772ff;  /* Vibrant Blue Accent */
-    --accent-green: #00e396; /* Neon Green for Positives */
-    --accent-red: #ff4560;   /* Neon Red for Negatives */
-    --accent-purple: #962eff; /* Purple Accent */
-    --card-shadow: 0 8px 16px rgba(0,0,0,0.2); /* Soft Shadow for Depth */
+    --bg-main: #0a0e17;
+    --bg-card: #151a25;
+    --text-main: #ffffff;
+    --text-muted: #8b9bb4;
+    --border: #2a3441;
+    --accent-blue: #3772ff;
+    --accent-green: #00e396;
+    --accent-red: #ff4560;
 }
-
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 body { 
     background-color: var(--bg-main); 
     color: var(--text-main); 
     font-family: 'Inter', sans-serif; 
-    margin: 0; height: 100vh; display: flex; flex-direction: column; 
-    overflow: hidden;
+    margin: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden;
 }
 
-/* --- HEADER --- */
+/* HEADER */
 .header {
     padding: 15px 20px; 
     background: rgba(21, 26, 37, 0.95); 
@@ -226,101 +223,48 @@ body {
     display: flex; justify-content: space-between; align-items: center;
     backdrop-filter: blur(10px);
 }
-.brand { 
-    font-size: 20px; font-weight: 800; letter-spacing: 0.5px; 
-    background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple)); 
-    -webkit-background-clip: text; -webkit-text-fill-color: transparent; 
-}
-.status-badge { 
-    font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 20px; 
-    background: rgba(0, 227, 150, 0.1); color: var(--accent-green); 
-    border: 1px solid rgba(0, 227, 150, 0.3); letter-spacing: 0.5px;
-    display: flex; align-items: center; gap: 5px;
-}
-.status-dot { width: 8px; height: 8px; background: var(--accent-green); border-radius: 50%; box-shadow: 0 0 8px var(--accent-green); }
+.brand { font-size: 18px; font-weight: 800; letter-spacing: 0.5px; background: linear-gradient(45deg, #3772ff, #9b5de5); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.status-badge { font-size: 11px; font-weight: 600; padding: 4px 8px; border-radius: 4px; background: #1c222e; color: var(--text-muted); border: 1px solid var(--border); }
 
-/* --- TOP DASHBOARD AREA --- */
-.dashboard-summary {
-    display: flex; gap: 15px; padding: 20px;
-    border-bottom: 1px solid var(--border);
-    background: linear-gradient(180deg, rgba(21, 26, 37, 0.5) 0%, rgba(10, 14, 23, 0) 100%);
-}
-.summary-card {
-    flex: 1; background: var(--bg-card); border: 1px solid var(--border);
-    border-radius: 16px; padding: 15px; display: flex; flex-direction: column; gap: 5px;
-    box-shadow: var(--card-shadow);
-}
-.summary-label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.8px; }
-.summary-value { font-size: 18px; font-weight: 800; }
-.txt-green { color: var(--accent-green); text-shadow: 0 0 10px rgba(0,227,150,0.3); }
-.txt-red { color: var(--accent-red); text-shadow: 0 0 10px rgba(255,69,96,0.3); }
-.txt-blue { color: var(--accent-blue); text-shadow: 0 0 10px rgba(55,114,255,0.3); }
+/* TOP METRICS */
+.dashboard { display: flex; border-bottom: 1px solid var(--border); height: 35%; }
+.metric-panel { flex: 1; padding: 20px; display: flex; flex-direction: column; justify-content: center; border-right: 1px solid var(--border); }
+.metric-label { color: var(--text-muted); font-size: 11px; font-weight: 600; letter-spacing: 1px; margin-bottom: 8px; text-transform: uppercase; }
+.metric-value { font-size: 22px; font-weight: 700; line-height: 1.2; }
+.txt-green { color: var(--accent-green); }
+.txt-red { color: var(--accent-red); }
 
-/* --- FILTER BAR --- */
-.filter-bar { 
-    padding: 15px 20px; display: flex; gap: 10px; 
-    background: var(--bg-main); border-bottom: 1px solid var(--border);
-    overflow-x: auto; scrollbar-width: none;
-}
-.filter-btn { 
-    background: var(--bg-card); border: 1px solid var(--border); color: var(--text-muted); 
-    padding: 8px 16px; border-radius: 12px; font-size: 12px; font-weight: 700; 
-    text-align: center; cursor: pointer; transition: all 0.2s; white-space: nowrap;
-}
-.filter-btn.active { 
-    background: var(--accent-blue); color: white; border-color: var(--accent-blue); 
-    box-shadow: 0 4px 12px rgba(55, 114, 255, 0.4); 
-}
+/* SIDE PANEL (TODAY'S PICK) */
+.side-panel { width: 35%; background: #11151e; border-left: 1px solid var(--border); display: flex; flex-direction: column; }
+.panel-head { padding: 12px; font-size: 11px; font-weight: 700; color: var(--accent-blue); text-align: center; border-bottom: 1px solid var(--border); background: #161b26; letter-spacing: 0.5px; }
+.pick-list { overflow-y: auto; flex: 1; }
+.pick-item { padding: 10px 15px; font-size: 12px; font-weight: 500; border-bottom: 1px solid #1e2532; color: #cbd5e1; }
 
-/* --- MAIN STOCK LIST (Modern Cards) --- */
-.stock-list { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+/* FILTERS */
+.filter-bar { padding: 12px 15px; display: flex; gap: 10px; background: var(--bg-main); border-bottom: 1px solid var(--border); }
+.chip { flex: 1; background: var(--bg-card); border: 1px solid var(--border); color: var(--text-muted); padding: 10px; border-radius: 8px; font-size: 11px; font-weight: 600; text-align: center; cursor: pointer; transition: all 0.2s; }
+.chip.active { background: var(--accent-blue); color: white; border-color: var(--accent-blue); box-shadow: 0 4px 12px rgba(55, 114, 255, 0.3); }
+
+/* STOCK LIST */
+.market-list { flex: 1; overflow-y: auto; padding: 15px; }
 .stock-card { 
     background: var(--bg-card); 
     border: 1px solid var(--border); 
-    padding: 18px 20px; 
-    border-radius: 16px; 
+    padding: 16px; 
+    border-radius: 12px; 
+    margin-bottom: 12px; 
     display: flex; justify-content: space-between; align-items: center;
-    box-shadow: var(--card-shadow);
-    transition: transform 0.2s, border-color 0.2s;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
 }
-.stock-card:hover { transform: translateY(-2px); border-color: var(--text-muted); }
-
-.st-info { display: flex; flex-direction: column; gap: 4px; }
-.st-name { font-size: 16px; font-weight: 800; color: var(--text-main); letter-spacing: 0.3px; }
-.st-cat-tag { 
-    font-size: 10px; font-weight: 700; color: var(--text-muted); 
-    background: rgba(255,255,255,0.05); padding: 3px 8px; 
-    border-radius: 6px; width: fit-content; 
-}
-.st-price-box { text-align: right; }
-.st-price { font-size: 20px; font-weight: 800; color: var(--accent-green); letter-spacing: 0.5px; }
-.st-wait { font-size: 14px; font-weight: 600; color: var(--text-muted); }
-
-/* --- BOTTOM NAVIGATION (Modern) --- */
-.bottom-nav {
-    height: 70px; background: rgba(21, 26, 37, 0.95);
-    border-top: 1px solid var(--border);
-    display: flex; justify-content: space-around; align-items: center;
-    padding-bottom: 10px; backdrop-filter: blur(10px);
-}
-.nav-item {
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    color: var(--text-muted); cursor: pointer; flex: 1; height: 100%;
-    transition: color 0.2s;
-}
-.nav-item.active { color: var(--accent-blue); }
-.nav-icon { font-size: 26px; margin-bottom: 2px; }
-.nav-label { font-size: 10px; font-weight: 600; }
-
-/* --- UTILS & ANIMATION --- */
+.st-info { display: flex; flex-direction: column; }
+.st-name { font-size: 14px; font-weight: 700; color: var(--text-main); margin-bottom: 4px; }
+.st-cat { font-size: 10px; font-weight: 600; color: var(--text-muted); background: #1e2532; padding: 3px 6px; border-radius: 4px; width: fit-content; }
+.st-price { font-size: 16px; font-weight: 700; color: var(--text-main); letter-spacing: 0.5px; }
 .hidden { display: none !important; }
-@keyframes pulse { 0% { opacity: 0.6; } 50% { opacity: 1; } 100% { opacity: 0.6; } }
-.loading-pulse { animation: pulse 1.5s infinite; }
 
-/* Custom Scrollbar */
-::-webkit-scrollbar { width: 4px; }
-::-webkit-scrollbar-track { background: var(--bg-main); }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; }
+/* ANIMATION */
+@keyframes pulse { 0% { opacity: 0.6; } 50% { opacity: 1; } 100% { opacity: 0.6; } }
+.loading { animation: pulse 1.5s infinite; }
 </style>
 <script>
 let currentWinner = "ALL";
@@ -328,7 +272,7 @@ let activeFilter = "ALL";
 
 function filterStocks(type) {
     activeFilter = type;
-    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.chip').forEach(b => b.classList.remove('active'));
     document.getElementById('btn-'+type).classList.add('active');
     applyFilter();
 }
@@ -342,44 +286,34 @@ function applyFilter() {
         else if (activeFilter === 'TODAY') {
             if (currentWinner === 'ALL' || cat === currentWinner) show = true;
         }
+        else if (activeFilter === 'DAILY') {
+            show = true; // Placeholder for "Today Stock" logic
+        }
         if(show) card.classList.remove('hidden'); else card.classList.add('hidden');
     });
-}
-
-function setActiveNav(el) {
-    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-    el.classList.add('active');
 }
 
 function fetchData() {
     fetch('/data')
     .then(response => response.json())
     .then(data => {
-        document.getElementById('status-text').innerText = data.status;
+        document.getElementById('status-disp').innerText = data.status;
         
         const ans1 = document.getElementById('ans1-disp');
         ans1.innerHTML = data.ans1;
-        if(data.ans1.includes("POSITIVE")) ans1.className = "summary-value txt-green";
-        else if(data.ans1.includes("NEGATIVE")) ans1.className = "summary-value txt-red";
-        else ans1.className = "summary-value loading-pulse";
+        if(data.ans1.includes("POSITIVE")) ans1.className = "metric-value txt-green";
+        else if(data.ans1.includes("NEGATIVE")) ans1.className = "metric-value txt-red";
+        else ans1.className = "metric-value loading";
 
-        const ans2 = document.getElementById('ans2-disp');
-        ans2.innerText = data.ans2;
-        if(data.ans2 !== "LOADING...") ans2.className = "summary-value txt-blue";
-        else ans2.className = "summary-value loading-pulse";
-        
+        document.getElementById('ans2-disp').innerText = data.ans2;
         currentWinner = data.winner;
         
         data.stocks.forEach(s => {
-            const priceEl = document.getElementById('price-' + s.name);
-            if(priceEl) {
-                if(s.price === "WAIT..." || s.price === "0.00" || s.price === "ERR") {
-                     priceEl.innerText = s.price;
-                     priceEl.className = "st-wait loading-pulse";
-                } else {
-                    priceEl.innerText = "₹" + s.price;
-                    priceEl.className = "st-price";
-                }
+            const el = document.getElementById('price-' + s.name);
+            if(el) {
+                el.innerText = "₹" + s.price;
+                // Simple color logic based on price (optional)
+                el.style.color = (s.price !== "0.00" && s.price !== "ERR") ? "#00e396" : "#ffffff";
             }
         });
         applyFilter();
@@ -392,56 +326,44 @@ setInterval(fetchData, 2000);
 
 <div class="header">
     <div class="brand">AI TRADER PRO</div>
-    <div class="status-badge"><div class="status-dot"></div><span id="status-text">CONNECTING...</span></div>
+    <div class="status-badge" id="status-disp">CONNECTING...</div>
 </div>
 
-<div class="dashboard-summary">
-    <div class="summary-card">
-        <span class="summary-label">Market Trend</span>
-        <span class="summary-value" id="ans1-disp">WAIT...</span>
+<div class="dashboard">
+    <div class="metric-panel">
+        <div class="metric-label">MARKET TREND</div>
+        <div class="metric-value" id="ans1-disp">WAIT...</div>
     </div>
-    <div class="summary-card">
-        <span class="summary-label">Strongest Sector</span>
-        <span class="summary-value" id="ans2-disp">LOADING...</span>
+    <div class="metric-panel" style="border-right: none;">
+        <div class="metric-label">STRONGEST SECTOR</div>
+        <div class="metric-value" style="color: var(--accent-blue);" id="ans2-disp">LOADING...</div>
+    </div>
+    <div class="side-panel">
+        <div class="panel-head">🔥 HOT PICKS</div>
+        <div class="pick-list">
+            {% for s in stocks %}
+            <div class="pick-item">{{ s.name }}</div>
+            {% endfor %}
+        </div>
     </div>
 </div>
 
 <div class="filter-bar">
-    <div id="btn-ALL" class="filter-btn active" onclick="filterStocks('ALL')">All Stocks</div>
-    <div id="btn-TODAY" class="filter-btn" onclick="filterStocks('TODAY')">🚀 Top Picks</div>
+    <div id="btn-ALL" class="chip active" onclick="filterStocks('ALL')">ALL STOCKS</div>
+    <div id="btn-TODAY" class="chip" onclick="filterStocks('TODAY')">🚀 AI PICK</div>
+    <div id="btn-DAILY" class="chip" onclick="filterStocks('DAILY')">📅 TODAY STOCK</div>
 </div>
 
-<div class="stock-list">
+<div class="market-list">
     {% for s in stocks %}
     <div class="stock-card" id="card-{{ s.name }}" data-cat="{{ s.cat }}">
         <div class="st-info">
             <span class="st-name">{{ s.name }}</span>
-            <span class="st-cat-tag">{{ s.cat }} SECTOR</span>
+            <span class="st-cat">{{ s.cat }}</span>
         </div>
-        <div class="st-price-box">
-            <div class="st-wait" id="price-{{ s.name }}">{{ s.price }}</div>
-        </div>
+        <div class="st-price" id="price-{{ s.name }}">₹{{ s.price }}</div>
     </div>
     {% endfor %}
-</div>
-
-<div class="bottom-nav">
-    <div class="nav-item active" onclick="setActiveNav(this)">
-        <span class="material-icons-outlined nav-icon">dashboard</span>
-        <span class="nav-label">Home</span>
-    </div>
-    <div class="nav-item" onclick="setActiveNav(this)">
-        <span class="material-icons-outlined nav-icon">insights</span>
-        <span class="nav-label">Analysis</span>
-    </div>
-    <div class="nav-item" onclick="setActiveNav(this)">
-        <span class="material-icons-outlined nav-icon">notifications</span>
-        <span class="nav-label">Alerts</span>
-    </div>
-    <div class="nav-item" onclick="setActiveNav(this)">
-        <span class="material-icons-outlined nav-icon">person</span>
-        <span class="nav-label">Profile</span>
-    </div>
 </div>
 
 </body>
