@@ -282,6 +282,7 @@ body {
     display: flex; justify-content: space-between; align-items: center;
     box-shadow: var(--card-shadow);
     transition: transform 0.2s, border-color 0.2s;
+    cursor: pointer; /* Clickable */
 }
 .stock-card:hover { transform: translateY(-2px); border-color: var(--text-muted); }
 
@@ -293,7 +294,7 @@ body {
     border-radius: 6px; width: fit-content; 
 }
 
-/* New Upload Button Style */
+/* Upload Button Style (Visual Only in Card) */
 .upload-btn {
     margin-top: 8px;
     background: rgba(55, 114, 255, 0.15);
@@ -303,7 +304,6 @@ body {
     border-radius: 8px;
     font-size: 10px;
     font-weight: 700;
-    cursor: pointer;
     width: fit-content;
     display: flex; align-items: center; gap: 4px;
     transition: all 0.2s;
@@ -313,6 +313,27 @@ body {
 .st-price-box { text-align: right; }
 .st-price { font-size: 20px; font-weight: 800; color: var(--accent-green); letter-spacing: 0.5px; }
 .st-wait { font-size: 14px; font-weight: 600; color: var(--text-muted); }
+
+/* --- POPUP WINDOW STYLES (NEW) --- */
+.modal-overlay {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0, 0, 0, 0.85); z-index: 2000;
+    display: flex; justify-content: center; align-items: center;
+    backdrop-filter: blur(8px);
+}
+.modal-box {
+    background: var(--bg-card); width: 85%; max-width: 350px;
+    padding: 25px; border-radius: 20px; border: 1px solid var(--border);
+    text-align: center; box-shadow: 0 20px 40px rgba(0,0,0,0.6);
+    animation: popin 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+.modal-title { font-size: 18px; font-weight: 800; color: var(--text-main); margin-bottom: 10px; }
+.modal-close {
+    margin-top: 20px; background: var(--accent-red); color: white;
+    border: none; padding: 10px 24px; border-radius: 10px;
+    font-weight: 700; cursor: pointer;
+}
+@keyframes popin { from { transform: scale(0.8); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 
 /* --- BOTTOM NAVIGATION (Modern) --- */
 .bottom-nav {
@@ -357,21 +378,16 @@ function applyFilter() {
         const cat = card.getAttribute('data-cat');
         let show = false;
         
-        // Show/Hide Card Logic
         if (activeFilter === 'ALL') show = true;
         else if (activeFilter === 'TODAY') show = true;
         else if (activeFilter === 'AI') { 
             if (currentWinner === 'ALL' || cat === currentWinner) show = true;
         }
 
-        // Show/Hide Upload Button Logic (ONLY FOR TODAY TAB)
         const btn = card.querySelector('.upload-btn');
         if(btn) {
-            if (activeFilter === 'TODAY') {
-                btn.classList.remove('hidden');
-            } else {
-                btn.classList.add('hidden');
-            }
+            if (activeFilter === 'TODAY') btn.classList.remove('hidden');
+            else btn.classList.add('hidden');
         }
 
         if(show) card.classList.remove('hidden'); else card.classList.add('hidden');
@@ -381,6 +397,19 @@ function applyFilter() {
 function setActiveNav(el) {
     document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
     el.classList.add('active');
+}
+
+// --- POPUP LOGIC ---
+function openCardPopup(stockName) {
+    // Only open if in TODAY tab
+    if(activeFilter === 'TODAY') {
+        document.getElementById('popup-name').innerText = stockName;
+        document.getElementById('modal-overlay').classList.remove('hidden');
+    }
+}
+
+function closePopup() {
+    document.getElementById('modal-overlay').classList.add('hidden');
 }
 
 function fetchData() {
@@ -446,7 +475,7 @@ setInterval(fetchData, 2000);
 
 <div class="stock-list">
     {% for s in stocks %}
-    <div class="stock-card" id="card-{{ s.name }}" data-cat="{{ s.cat }}">
+    <div class="stock-card" id="card-{{ s.name }}" data-cat="{{ s.cat }}" onclick="openCardPopup('{{ s.name }}')">
         <div class="st-info">
             <span class="st-name">{{ s.name }}</span>
             <span class="st-cat-tag">{{ s.cat }} SECTOR</span>
@@ -462,6 +491,14 @@ setInterval(fetchData, 2000);
         </div>
     </div>
     {% endfor %}
+</div>
+
+<div id="modal-overlay" class="modal-overlay hidden">
+    <div class="modal-box">
+        <div class="modal-title" id="popup-name">STOCK NAME</div>
+        <p style="color: var(--text-muted); font-size: 14px;">Chart Upload Window</p>
+        <button class="modal-close" onclick="closePopup()">CLOSE</button>
+    </div>
 </div>
 
 <div class="bottom-nav">
