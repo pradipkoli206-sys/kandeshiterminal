@@ -765,5 +765,5 @@ window.onload = function() {
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
-    # ✅ SOCKETIO RUN (Not app.run)
-    socketio.run(app, host='0.0.0.0', port=port)
+    # ✅ FIX: Allow unsafe werkzeug for Render free tier testing
+    socketio.run(app, host='0.0.0.0', port=port, allow_unsafe_werkzeug=True)
