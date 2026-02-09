@@ -292,6 +292,24 @@ body {
     background: rgba(255,255,255,0.05); padding: 3px 8px; 
     border-radius: 6px; width: fit-content; 
 }
+
+/* New Upload Button Style */
+.upload-btn {
+    margin-top: 8px;
+    background: rgba(55, 114, 255, 0.15);
+    color: var(--accent-blue);
+    border: 1px solid rgba(55, 114, 255, 0.3);
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 10px;
+    font-weight: 700;
+    cursor: pointer;
+    width: fit-content;
+    display: flex; align-items: center; gap: 4px;
+    transition: all 0.2s;
+}
+.upload-btn:hover { background: var(--accent-blue); color: white; }
+
 .st-price-box { text-align: right; }
 .st-price { font-size: 20px; font-weight: 800; color: var(--accent-green); letter-spacing: 0.5px; }
 .st-wait { font-size: 14px; font-weight: 600; color: var(--text-muted); }
@@ -338,11 +356,24 @@ function applyFilter() {
     cards.forEach(card => {
         const cat = card.getAttribute('data-cat');
         let show = false;
+        
+        // Show/Hide Card Logic
         if (activeFilter === 'ALL') show = true;
-        else if (activeFilter === 'TODAY') show = true; // Today Stock लॉजिक
-        else if (activeFilter === 'AI') { // AI Pick लॉजिक (Winning Sector)
+        else if (activeFilter === 'TODAY') show = true;
+        else if (activeFilter === 'AI') { 
             if (currentWinner === 'ALL' || cat === currentWinner) show = true;
         }
+
+        // Show/Hide Upload Button Logic (ONLY FOR TODAY TAB)
+        const btn = card.querySelector('.upload-btn');
+        if(btn) {
+            if (activeFilter === 'TODAY') {
+                btn.classList.remove('hidden');
+            } else {
+                btn.classList.add('hidden');
+            }
+        }
+
         if(show) card.classList.remove('hidden'); else card.classList.add('hidden');
     });
 }
@@ -419,6 +450,12 @@ setInterval(fetchData, 2000);
         <div class="st-info">
             <span class="st-name">{{ s.name }}</span>
             <span class="st-cat-tag">{{ s.cat }} SECTOR</span>
+            
+            <div class="upload-btn hidden">
+                <span class="material-icons-outlined" style="font-size: 14px;">upload_file</span>
+                Upload Chart
+            </div>
+
         </div>
         <div class="st-price-box">
             <div class="st-wait" id="price-{{ s.name }}">{{ s.price }}</div>
