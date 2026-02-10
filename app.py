@@ -315,7 +315,7 @@ def start_engine():
                 "stocks": STOCKS
             })
             
-            time.sleep(1) # Refresh rate increased since we push data now
+            time.sleep(0.5) # Refresh rate increased since we push data now
         except Exception as e:
             print(f"Engine Error: {e}")
             smart_api = None; time.sleep(5)
