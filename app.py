@@ -620,8 +620,12 @@ function openCardPopup(stockName) {
         imgContainer.innerHTML = '';
         
         if (stockImages[stockName]) {
-            // ✅ FIX: Constrained image Height to 250px and object-fit contain
-            imgContainer.innerHTML = '<img src="' + stockImages[stockName] + '" style="width: 100%; height: 250px; object-fit: contain; border-radius: 10px; border: 1px solid var(--border); background: rgba(0,0,0,0.3);">';
+            // ✅ FIX: Image is now wrapped in a mini-card DIV with fixed height, keeping it small and neat.
+            imgContainer.innerHTML = `
+                <div style="width: 100%; height: 200px; border: 1px solid var(--border); border-radius: 10px; background: rgba(0,0,0,0.2); display: flex; align-items: center; justify-content: center; overflow: hidden;">
+                    <img src="${stockImages[stockName]}" style="max-width: 100%; max-height: 100%; object-fit: contain;">
+                </div>
+            `;
             delBtn.classList.remove('hidden');
             delBtn.onclick = function() { deleteChart(stockName); };
         } else {
