@@ -9,4 +9,5 @@ requests
 logzero
 websocket-client
 flask-socketio
-playwright
+selenium
+webdriver-manager
