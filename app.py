@@ -634,15 +634,47 @@ function closePopup() {
     document.getElementById('modal-overlay').classList.add('hidden');
 }
 
-// ✅ NEW: WEBSOCKET LOGIC (Replaces setInterval)
-var socket = io();
+// ✅ NEW: WEBSOCKET LOGIC WITH STATUS & ERROR HANDLING
+// Explicit namespace connection to avoid default handling issues
+var socket = io('/'); 
 
 socket.on('connect', function() {
-    console.log("Connected to Server via WebSocket");
+    console.log("✅ [Socket] Connected to server.");
+    // Update Text
     document.getElementById('status-text').innerText = "LIVE SOCKET";
+    
+    // Update Colors via existing CSS variables (Visual Feedback)
+    const dot = document.querySelector('.status-dot');
+    const badge = document.querySelector('.status-badge');
+    if(dot && badge) {
+        dot.style.backgroundColor = "var(--accent-green)";
+        badge.style.borderColor = "rgba(0, 227, 150, 0.3)";
+        badge.style.color = "var(--accent-green)";
+    }
+});
+
+socket.on('disconnect', function() {
+    console.log("❌ [Socket] Disconnected from server.");
+    document.getElementById('status-text').innerText = "OFFLINE";
+    
+    // Visual Feedback for Error
+    const dot = document.querySelector('.status-dot');
+    const badge = document.querySelector('.status-badge');
+    if(dot && badge) {
+        dot.style.backgroundColor = "var(--accent-red)";
+        badge.style.borderColor = "var(--accent-red)";
+        badge.style.color = "var(--accent-red)";
+    }
+});
+
+socket.on('connect_error', (err) => {
+    console.log("⚠️ [Socket] Connection Error: " + err);
+    document.getElementById('status-text').innerText = "ERROR";
 });
 
 socket.on('update_data', function(data) {
+    console.log("📥 [Socket] Data Received:", data); // Debug Log
+
     // 1. Update Status Text
     document.getElementById('status-text').innerText = data.status;
 
