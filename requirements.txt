@@ -9,3 +9,4 @@ requests
 logzero
 websocket-client
 flask-socketio
+playwright
