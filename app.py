@@ -353,14 +353,11 @@ def data():
 @app.route('/get_chart_screenshot/<symbol>')
 def get_chart_screenshot(symbol):
     """
-    Backend Proxy Logic:
-    1. Opens Headless Browser
-    2. Goes to TradingView URL for symbol
-    3. Takes screenshot
-    4. Saves to static/chart_{symbol}.png
+    Backend Proxy Logic with Live Status Updates via SocketIO
     """
     try:
-        # Setup Headless Chrome
+        # Step 1: Initialize
+        socketio.emit('process_log', {'msg': '🚀 Opening Browser Engine...'})
         chrome_options = Options()
         chrome_options.add_argument("--headless")
         chrome_options.add_argument("--no-sandbox")
@@ -368,12 +365,14 @@ def get_chart_screenshot(symbol):
         
         driver = webdriver.Chrome(options=chrome_options)
         
-        # URL Construction (Example URL - Adjust specific TradingView logic if needed)
+        # Step 2: Navigation
+        socketio.emit('process_log', {'msg': f'🔍 Searching Chart: {symbol}'})
         url = f"https://in.tradingview.com/chart/?symbol=NSE:{symbol}"
         driver.get(url)
         
-        # Wait for render (adjust sleep as needed)
-        time.sleep(3) 
+        # Step 3: Wait & Capture
+        socketio.emit('process_log', {'msg': '📸 Capturing Technical Data...'})
+        time.sleep(8) 
         
         # Save Screenshot
         filename = f"chart_{symbol}.png"
@@ -381,6 +380,8 @@ def get_chart_screenshot(symbol):
         driver.save_screenshot(filepath)
         driver.quit()
         
+        # Step 4: Done
+        socketio.emit('process_log', {'msg': '✅ Chart Loaded Successfully!'})
         return jsonify({"status": "success", "image_url": f"/static/{filename}"})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
@@ -590,13 +591,22 @@ function openCardPopup(stockName) {
     document.getElementById('popup-name').innerText = stockName;
     document.getElementById('modal-overlay').classList.remove('hidden');
 
-    // Reset Image State (Hide it initially)
+    // Reset Image & Status
     const aiImg = document.getElementById('ai-screenshot');
+    const statusContainer = document.getElementById('status-container');
+    const processMsg = document.getElementById('process-msg');
+    
     aiImg.style.display = 'none';
     aiImg.src = "";
+    statusContainer.style.display = 'none'; // Hide status initially
 
-    // ✅ BUTTON CLICK LOGIC: Fetch screenshot ONLY when button is clicked
+    // ✅ BUTTON CLICK LOGIC:
     document.getElementById('btn-chart-read').onclick = function() {
+        // Show status, hide image
+        aiImg.style.display = 'none';
+        statusContainer.style.display = 'block';
+        processMsg.innerText = "Initializing...";
+
         // Call the backend to trigger/get screenshot
         fetch('/get_chart_screenshot/' + stockName)
         .then(response => response.json())
@@ -604,12 +614,20 @@ function openCardPopup(stockName) {
             if(data.status === 'success') {
                 // Add timestamp to force image refresh (cache busting)
                 aiImg.src = data.image_url + "?" + new Date().getTime();
-                aiImg.style.display = 'block';
+                // Show image, Hide status
+                aiImg.onload = function() {
+                    statusContainer.style.display = 'none';
+                    aiImg.style.display = 'block';
+                };
             } else {
-                console.log("Screenshot Error: " + data.message);
+                processMsg.innerText = "Error: " + data.message;
+                processMsg.style.color = "var(--accent-red)";
             }
         })
-        .catch(err => console.log("Fetch Error: " + err));
+        .catch(err => {
+            processMsg.innerText = "Connection Failed";
+            processMsg.style.color = "var(--accent-red)";
+        });
     };
 }
 
@@ -653,6 +671,15 @@ socket.on('disconnect', function() {
 socket.on('connect_error', (err) => {
     console.log("⚠️ [Socket] Connection Error: " + err);
     document.getElementById('status-text').innerText = "ERROR";
+});
+
+// ✅ LISTEN FOR BACKEND PROCESS LOGS
+socket.on('process_log', function(data) {
+    const processMsg = document.getElementById('process-msg');
+    if(processMsg) {
+        processMsg.innerText = data.msg;
+        processMsg.style.color = "var(--text-muted)"; // Reset color
+    }
 });
 
 socket.on('update_data', function(data) {
@@ -739,11 +766,16 @@ socket.on('update_data', function(data) {
     <div class="modal-box">
         <div class="modal-title" id="popup-name">STOCK NAME</div>
         
-        <div style="background: var(--bg-main); border: 1px solid var(--border); border-radius: 10px; padding: 15px; margin-top: 10px; min-height: 200px; display: flex; align-items: center; justify-content: center;">
+        <div style="background: var(--bg-main); border: 1px solid var(--border); border-radius: 10px; padding: 15px; margin-top: 10px; min-height: 200px; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+            <div id="status-container" style="display: none; text-align: center;">
+                <div class="loading-pulse" style="color: var(--accent-blue); font-size: 24px; margin-bottom: 10px;">⚙️</div>
+                <div id="process-msg" style="color: var(--text-muted); font-size: 12px; font-weight: 700;">Initializing...</div>
+            </div>
+            
             <img id="ai-screenshot" style="width: 100%; border-radius: 10px; display: none;" onerror="this.style.display='none'">
         </div>
 
-        <button id="btn-chart-read" style="width: 100%; background: var(--bg-card); border: 1px solid var(--accent-blue); color: var(--accent-blue); padding: 10px; border-radius: 10px; font-weight: 700; margin-top: 15px; cursor: pointer;">
+        <button id="btn-chart-read" style="width: 100%; background: var(--bg-card); border: 1px solid var(--accent-blue); color: var(--accent-blue); padding: 10px; border-radius: 10px; font-weight: 700; margin-top: 15px; cursor: pointer; transition: all 0.3s;">
             CHART READING
         </button>
         
