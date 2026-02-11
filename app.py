@@ -11,18 +11,10 @@ from flask import Flask, render_template_string, jsonify
 from SmartApi import SmartConnect
 from flask_socketio import SocketIO, emit
 
-# --- NEW IMPORTS FOR SCREENSHOT ---
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-
-app = Flask(__name__, static_folder='static') # Configured static folder
+app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret_key_for_websocket'
 # WebSocket Initialization (Threading mode used for compatibility)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
-
-# --- ENSURE STATIC FOLDER EXISTS ---
-if not os.path.exists('static'):
-    os.makedirs('static')
 
 # --- 1. KEYS (UNTOUCHED) ---
 API_KEY = os.environ.get("API_KEY")
@@ -33,6 +25,7 @@ RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL")
 
 live_data = {} 
 market_status = "CHECKING..."
+market_active = False # ✅ DEFAULT OFF TO SAVE DATA
 ans1_nifty = "WAIT..."
 ans2_sector = "LOADING..."
 winning_sector_code = "ALL"
@@ -164,7 +157,7 @@ def get_single_ltp(smart_api, exchange, symbol, token):
     return None
 
 def start_engine():
-    global live_data, market_status, ans1_nifty, ans2_sector, winning_sector_code, tokens_loaded
+    global live_data, market_status, ans1_nifty, ans2_sector, winning_sector_code, tokens_loaded, market_active
     smart_api = None
     last_ping_time = time.time()
     
@@ -179,6 +172,20 @@ def start_engine():
 
     while True:
         try:
+            # ✅ CHECK IF MARKET SWITCH IS ON
+            if not market_active:
+                market_status = "STOPPED"
+                socketio.emit('update_data', {
+                    "status": "STOPPED",
+                    "ans1": "PAUSED", 
+                    "ans2": "PAUSED",
+                    "winner": winning_sector_code,
+                    "stocks": STOCKS,
+                    "active": False
+                })
+                time.sleep(2) # Sleep longer when stopped to save resources
+                continue
+
             utc_now = datetime.now(timezone.utc)
             ist_now = utc_now + timedelta(hours=5, minutes=30)
             current_time = ist_now.time()
@@ -194,7 +201,8 @@ def start_engine():
                 # Emit holiday status via Websocket
                 socketio.emit('update_data', {
                     "status": market_status, "ans1": ans1_nifty, 
-                    "ans2": ans2_sector, "winner": winning_sector_code, "stocks": STOCKS
+                    "ans2": ans2_sector, "winner": winning_sector_code, "stocks": STOCKS,
+                    "active": True
                 })
                 
                 time.sleep(60)
@@ -219,7 +227,6 @@ def start_engine():
             # ✅ TEST MODE ON
             is_market_active = True 
 
-            # ✅ DATA SAVER: Background ping removed/optimized
             if time.time() - last_ping_time > 600:
                 if RENDER_URL:
                     try: requests.get(RENDER_URL)
@@ -230,7 +237,8 @@ def start_engine():
                 market_status = "CLOSED"
                 socketio.emit('update_data', {
                     "status": market_status, "ans1": ans1_nifty, 
-                    "ans2": ans2_sector, "winner": winning_sector_code, "stocks": STOCKS
+                    "ans2": ans2_sector, "winner": winning_sector_code, "stocks": STOCKS,
+                    "active": True
                 })
                 time.sleep(30)
                 continue 
@@ -321,11 +329,11 @@ def start_engine():
                 "ans1": ans1_nifty,
                 "ans2": ans2_sector,
                 "winner": winning_sector_code,
-                "stocks": STOCKS
+                "stocks": STOCKS,
+                "active": True
             })
             
-            # ✅ DATA SAVER & SPEED BALANCED: 1 Second Refresh Rate
-            time.sleep(1) 
+            time.sleep(1) # Refresh rate increased since we push data now
         except Exception as e:
             print(f"Engine Error: {e}")
             smart_api = None; time.sleep(5)
@@ -349,42 +357,12 @@ def data():
         if s.get("token"): s["price"] = current_data.get(s["token"], "WAIT...")
     return jsonify({"status": market_status, "ans1": ans1_nifty, "ans2": ans2_sector, "winner": winning_sector_code, "stocks": STOCKS})
 
-# --- NEW ROUTE: BACKEND PROXY SCREENSHOT ---
-@app.route('/get_chart_screenshot/<symbol>')
-def get_chart_screenshot(symbol):
-    """
-    Backend Proxy Logic with Live Status Updates via SocketIO
-    """
-    try:
-        # Step 1: Initialize
-        socketio.emit('process_log', {'msg': '🚀 Opening Browser Engine...'})
-        chrome_options = Options()
-        chrome_options.add_argument("--headless")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        
-        driver = webdriver.Chrome(options=chrome_options)
-        
-        # Step 2: Navigation
-        socketio.emit('process_log', {'msg': f'🔍 Searching Chart: {symbol}'})
-        url = f"https://in.tradingview.com/chart/?symbol=NSE:{symbol}"
-        driver.get(url)
-        
-        # Step 3: Wait & Capture
-        socketio.emit('process_log', {'msg': '📸 Capturing Technical Data...'})
-        time.sleep(8) 
-        
-        # Save Screenshot
-        filename = f"chart_{symbol}.png"
-        filepath = os.path.join('static', filename)
-        driver.save_screenshot(filepath)
-        driver.quit()
-        
-        # Step 4: Done
-        socketio.emit('process_log', {'msg': '✅ Chart Loaded Successfully!'})
-        return jsonify({"status": "success", "image_url": f"/static/{filename}"})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
+# ✅ TOGGLE ROUTE ADDED
+@app.route('/toggle_market')
+def toggle_market():
+    global market_active
+    market_active = not market_active
+    return jsonify({"status": "success", "active": market_active})
 
 # --- 6. HTML TEMPLATE ---
 HTML_TEMPLATE = '''<!DOCTYPE html>
@@ -432,13 +410,24 @@ body {
     background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple)); 
     -webkit-background-clip: text; -webkit-text-fill-color: transparent; 
 }
-.status-badge { 
-    font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 20px; 
-    background: rgba(0, 227, 150, 0.1); color: var(--accent-green); 
-    border: 1px solid rgba(0, 227, 150, 0.3); letter-spacing: 0.5px;
-    display: flex; align-items: center; gap: 5px;
+
+/* NEW MARKET TOGGLE BUTTON */
+.market-toggle-btn {
+    background: rgba(255, 69, 96, 0.1); 
+    color: var(--accent-red);
+    border: 1px solid var(--accent-red);
+    padding: 6px 14px; 
+    border-radius: 20px;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.5px;
+    display: flex; align-items: center; gap: 6px;
+    cursor: pointer; transition: all 0.3s ease;
 }
-.status-dot { width: 8px; height: 8px; background: var(--accent-green); border-radius: 50%; box-shadow: 0 0 8px var(--accent-green); }
+.market-toggle-btn.active {
+    background: rgba(0, 227, 150, 0.1); 
+    color: var(--accent-green);
+    border-color: var(--accent-green);
+}
+.power-icon { font-size: 14px; }
 
 /* --- TOP DASHBOARD AREA --- */
 .dashboard-summary {
@@ -495,6 +484,23 @@ body {
     border-radius: 6px; width: fit-content; 
 }
 
+/* Upload Button Style (Visual Only in Card) */
+.upload-btn {
+    margin-top: 8px;
+    background: rgba(55, 114, 255, 0.15);
+    color: var(--accent-blue);
+    border: 1px solid rgba(55, 114, 255, 0.3);
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 10px;
+    font-weight: 700;
+    width: fit-content;
+    display: flex; align-items: center; gap: 4px;
+    transition: all 0.2s;
+    cursor: pointer;
+}
+.upload-btn:hover { background: var(--accent-blue); color: white; }
+
 .st-price-box { text-align: right; }
 .st-price { font-size: 20px; font-weight: 800; color: var(--accent-green); letter-spacing: 0.5px; }
 .st-wait { font-size: 14px; font-weight: 600; color: var(--text-muted); }
@@ -520,6 +526,13 @@ body {
     border: none; padding: 10px 24px; border-radius: 10px;
     font-weight: 700; cursor: pointer; width: 100%;
 }
+/* DELETE BUTTON STYLE (ADDED TO MATCH THEME) */
+.modal-delete {
+    background: transparent; color: var(--accent-red);
+    border: 1px solid var(--accent-red); padding: 8px 24px; border-radius: 10px;
+    font-weight: 700; cursor: pointer; width: 100%; font-size: 12px;
+}
+.modal-delete:hover { background: rgba(255, 69, 96, 0.1); }
 
 @keyframes popin { from { transform: scale(0.8); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 
@@ -553,6 +566,38 @@ body {
 // ✅ FIX: Initialize with Server Variable immediately
 let currentWinner = "{{ winner }}";
 let activeFilter = "ALL";
+let stockImages = {};
+
+// --- TOGGLE MARKET LOGIC ---
+function toggleMarket() {
+    fetch('/toggle_market')
+    .then(response => response.json())
+    .then(data => {
+        const btn = document.getElementById('market-btn');
+        const icon = btn.querySelector('.power-icon');
+        const text = btn.querySelector('span');
+        
+        if (data.active) {
+            btn.classList.add('active');
+            text.innerText = "LIVE";
+            icon.innerText = "power_settings_new";
+        } else {
+            btn.classList.remove('active');
+            text.innerText = "STOPPED";
+            icon.innerText = "pause_circle";
+        }
+    });
+}
+
+// --- LOCAL STORAGE LOGIC ---
+function loadImagesFromStorage() {
+    const cards = document.querySelectorAll('.stock-card');
+    cards.forEach(card => {
+        const name = card.querySelector('.st-name').innerText;
+        const saved = localStorage.getItem('chart_' + name);
+        if(saved) stockImages[name] = saved;
+    });
+}
 
 function filterStocks(type) {
     activeFilter = type;
@@ -573,6 +618,12 @@ function applyFilter() {
             if (currentWinner === 'ALL' || cat === currentWinner) show = true;
         }
 
+        const btn = card.querySelector('.upload-btn');
+        if(btn) {
+            if (activeFilter === 'TODAY') btn.classList.remove('hidden');
+            else btn.classList.add('hidden');
+        }
+
         if(show) card.classList.remove('hidden'); else card.classList.add('hidden');
     });
 }
@@ -582,53 +633,64 @@ function setActiveNav(el) {
     el.classList.add('active');
 }
 
-function openCardPopup(stockName) {
-    // ✅ NEW CHECK: Only allow popup if active filter is "TODAY"
-    if (activeFilter !== 'TODAY') {
-        return;
-    }
+function triggerUpload(event, stockName) {
+    // ✅ PREVENTS BUBBLING: Clicking Upload won't open the card popup
+    event.stopPropagation();
+    document.getElementById('file-input-' + stockName).click();
+}
 
-    document.getElementById('popup-name').innerText = stockName;
-    document.getElementById('modal-overlay').classList.remove('hidden');
-
-    // Reset Image & Status
-    const aiImg = document.getElementById('ai-screenshot');
-    const statusContainer = document.getElementById('status-container');
-    const processMsg = document.getElementById('process-msg');
-    
-    aiImg.style.display = 'none';
-    aiImg.src = "";
-    statusContainer.style.display = 'none'; // Hide status initially
-
-    // ✅ BUTTON CLICK LOGIC:
-    document.getElementById('btn-chart-read').onclick = function() {
-        // Show status, hide image
-        aiImg.style.display = 'none';
-        statusContainer.style.display = 'block';
-        processMsg.innerText = "Initializing...";
-
-        // Call the backend to trigger/get screenshot
-        fetch('/get_chart_screenshot/' + stockName)
-        .then(response => response.json())
-        .then(data => {
-            if(data.status === 'success') {
-                // Add timestamp to force image refresh (cache busting)
-                aiImg.src = data.image_url + "?" + new Date().getTime();
-                // Show image, Hide status
-                aiImg.onload = function() {
-                    statusContainer.style.display = 'none';
-                    aiImg.style.display = 'block';
-                };
-            } else {
-                processMsg.innerText = "Error: " + data.message;
-                processMsg.style.color = "var(--accent-red)";
+function handleFileSelect(input, stockName) {
+    if (input.files && input.files[0]) {
+        var reader = new FileReader();
+        reader.onload = function (e) {
+            stockImages[stockName] = e.target.result;
+            // SAVE TO LOCAL STORAGE
+            try {
+                localStorage.setItem('chart_' + stockName, e.target.result);
+                // 🚫 ALERT REMOVED: Silent Save
+            } catch (err) {
+                console.log("Image too big to save.");
             }
-        })
-        .catch(err => {
-            processMsg.innerText = "Connection Failed";
-            processMsg.style.color = "var(--accent-red)";
-        });
-    };
+        }
+        reader.readAsDataURL(input.files[0]);
+    }
+}
+
+// --- DELETE FUNCTION ---
+function deleteChart(stockName) {
+    // 🚫 CONFIRMATION REMOVED: Deletes immediately on click
+    localStorage.removeItem('chart_' + stockName);
+    delete stockImages[stockName];
+    closePopup();
+    // 🚫 SUCCESS ALERT REMOVED: Silent Delete
+}
+
+function openCardPopup(stockName) {
+    const saved = localStorage.getItem('chart_' + stockName);
+    if(saved) stockImages[stockName] = saved;
+
+    if(activeFilter === 'TODAY') {
+        document.getElementById('popup-name').innerText = stockName;
+        const imgContainer = document.getElementById('popup-img-container');
+        const delBtn = document.getElementById('popup-delete-btn');
+        
+        imgContainer.innerHTML = '';
+        
+        if (stockImages[stockName]) {
+            // ✅ FIX: Image is now wrapped in a mini-card DIV with fixed height, keeping it small and neat.
+            imgContainer.innerHTML = `
+                <div style="width: 100%; height: 200px; border: 1px solid var(--border); border-radius: 10px; background: rgba(0,0,0,0.2); display: flex; align-items: center; justify-content: center; overflow: hidden;">
+                    <img src="${stockImages[stockName]}" style="max-width: 100%; max-height: 100%; object-fit: contain;">
+                </div>
+            `;
+            delBtn.classList.remove('hidden');
+            delBtn.onclick = function() { deleteChart(stockName); };
+        } else {
+            imgContainer.innerHTML = '<p style="color: var(--text-muted); font-size: 14px;">No chart uploaded yet.</p>';
+            delBtn.classList.add('hidden');
+        }
+        document.getElementById('modal-overlay').classList.remove('hidden');
+    }
 }
 
 function closePopup() {
@@ -641,52 +703,33 @@ var socket = io('/');
 
 socket.on('connect', function() {
     console.log("✅ [Socket] Connected to server.");
-    // Update Text
-    document.getElementById('status-text').innerText = "LIVE SOCKET";
-    
-    // Update Colors via existing CSS variables (Visual Feedback)
-    const dot = document.querySelector('.status-dot');
-    const badge = document.querySelector('.status-badge');
-    if(dot && badge) {
-        dot.style.backgroundColor = "var(--accent-green)";
-        badge.style.borderColor = "rgba(0, 227, 150, 0.3)";
-        badge.style.color = "var(--accent-green)";
-    }
 });
 
 socket.on('disconnect', function() {
     console.log("❌ [Socket] Disconnected from server.");
-    document.getElementById('status-text').innerText = "OFFLINE";
-    
-    // Visual Feedback for Error
-    const dot = document.querySelector('.status-dot');
-    const badge = document.querySelector('.status-badge');
-    if(dot && badge) {
-        dot.style.backgroundColor = "var(--accent-red)";
-        badge.style.borderColor = "var(--accent-red)";
-        badge.style.color = "var(--accent-red)";
-    }
 });
 
 socket.on('connect_error', (err) => {
     console.log("⚠️ [Socket] Connection Error: " + err);
-    document.getElementById('status-text').innerText = "ERROR";
-});
-
-// ✅ LISTEN FOR BACKEND PROCESS LOGS
-socket.on('process_log', function(data) {
-    const processMsg = document.getElementById('process-msg');
-    if(processMsg) {
-        processMsg.innerText = data.msg;
-        processMsg.style.color = "var(--text-muted)"; // Reset color
-    }
 });
 
 socket.on('update_data', function(data) {
     console.log("📥 [Socket] Data Received:", data); // Debug Log
 
-    // 1. Update Status Text
-    document.getElementById('status-text').innerText = data.status;
+    // 1. Update Market Switch UI based on Server Status
+    const marketBtn = document.getElementById('market-btn');
+    const marketIcon = marketBtn.querySelector('.power-icon');
+    const marketText = marketBtn.querySelector('span');
+    
+    if (data.active) {
+        marketBtn.classList.add('active');
+        marketText.innerText = "LIVE";
+        marketIcon.innerText = "power_settings_new";
+    } else {
+        marketBtn.classList.remove('active');
+        marketText.innerText = "STOPPED";
+        marketIcon.innerText = "pause_circle";
+    }
 
     // 2. Update ans1 (Nifty)
     const ans1 = document.getElementById('ans1-disp');
@@ -722,13 +765,21 @@ socket.on('update_data', function(data) {
     applyFilter();
 });
 
+// Initial Load
+window.onload = function() {
+    loadImagesFromStorage();
+};
 </script>
 </head>
 <body>
 
 <div class="header">
     <div class="brand">AI TRADER PRO</div>
-    <div class="status-badge"><div class="status-dot"></div><span id="status-text">CONNECTING...</span></div>
+    
+    <div id="market-btn" class="market-toggle-btn" onclick="toggleMarket()">
+        <span class="material-icons-outlined power-icon">pause_circle</span>
+        <span>STOPPED</span>
+    </div>
 </div>
 
 <div class="dashboard-summary">
@@ -754,6 +805,11 @@ socket.on('update_data', function(data) {
         <div class="st-info">
             <span class="st-name">{{ s.name }}</span>
             <span class="st-cat-tag">{{ s.cat }} SECTOR</span>
+            <div class="upload-btn hidden" onclick="triggerUpload(event, '{{ s.name }}')">
+                <span class="material-icons-outlined" style="font-size: 14px;">upload_file</span>
+                Upload Chart
+            </div>
+            <input type="file" id="file-input-{{ s.name }}" style="display: none;" accept="image/*" onchange="handleFileSelect(this, '{{ s.name }}')">
         </div>
         <div class="st-price-box">
             <div class="st-wait" id="price-{{ s.name }}">{{ s.price }}</div>
@@ -765,23 +821,11 @@ socket.on('update_data', function(data) {
 <div id="modal-overlay" class="modal-overlay hidden">
     <div class="modal-box">
         <div class="modal-title" id="popup-name">STOCK NAME</div>
-        
-        <div style="background: var(--bg-main); border: 1px solid var(--border); border-radius: 10px; padding: 15px; margin-top: 10px; min-height: 200px; display: flex; flex-direction: column; align-items: center; justify-content: center;">
-            <div id="status-container" style="display: none; text-align: center;">
-                <div class="loading-pulse" style="color: var(--accent-blue); font-size: 24px; margin-bottom: 10px;">⚙️</div>
-                <div id="process-msg" style="color: var(--text-muted); font-size: 12px; font-weight: 700;">Initializing...</div>
-            </div>
-            
-            <img id="ai-screenshot" style="width: 100%; border-radius: 10px; display: none;" onerror="this.style.display='none'">
+        <div id="popup-img-container">
+            <p style="color: var(--text-muted); font-size: 14px;">Chart Upload Window</p>
         </div>
-
-        <button id="btn-chart-read" style="width: 100%; background: var(--bg-card); border: 1px solid var(--accent-blue); color: var(--accent-blue); padding: 10px; border-radius: 10px; font-weight: 700; margin-top: 15px; cursor: pointer; transition: all 0.3s;">
-            CHART READING
-        </button>
-        
-        <div style="background: var(--bg-main); border: 1px solid var(--border); border-radius: 10px; padding: 15px; margin-top: 15px; min-height: 100px;"></div>
-
-        <button class="modal-close" onclick="closePopup()" style="margin-top: 15px;">CLOSE</button>
+        <button id="popup-delete-btn" class="modal-delete hidden">DELETE CHART</button>
+        <button class="modal-close" onclick="closePopup()">CLOSE</button>
     </div>
 </div>
 
