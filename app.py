@@ -739,15 +739,15 @@ socket.on('update_data', function(data) {
     <div class="modal-box">
         <div class="modal-title" id="popup-name">STOCK NAME</div>
         
+        <div style="background: var(--bg-main); border: 1px solid var(--border); border-radius: 10px; padding: 15px; margin-top: 10px; min-height: 200px; display: flex; align-items: center; justify-content: center;">
+            <img id="ai-screenshot" style="width: 100%; border-radius: 10px; display: none;" onerror="this.style.display='none'">
+        </div>
+
         <button id="btn-chart-read" style="width: 100%; background: var(--bg-card); border: 1px solid var(--accent-blue); color: var(--accent-blue); padding: 10px; border-radius: 10px; font-weight: 700; margin-top: 15px; cursor: pointer;">
             CHART READING
         </button>
-
-        <div style="background: var(--bg-main); border: 1px solid var(--border); border-radius: 10px; padding: 15px; margin-top: 10px; min-height: 50px;">
-            <img id="ai-screenshot" style="width: 100%; border-radius: 10px; display: none;" onerror="this.style.display='none'">
-        </div>
         
-        <div style="background: var(--bg-main); border: 1px solid var(--border); border-radius: 10px; padding: 15px; margin-top: 10px; min-height: 50px;"></div>
+        <div style="background: var(--bg-main); border: 1px solid var(--border); border-radius: 10px; padding: 15px; margin-top: 15px; min-height: 100px;"></div>
 
         <button class="modal-close" onclick="closePopup()" style="margin-top: 15px;">CLOSE</button>
     </div>
