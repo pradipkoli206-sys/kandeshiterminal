@@ -9,7 +9,7 @@ webdriver-manager
 pandas
 logzero
 httpx
-google-generativeai
+google-genai
 Pillow
 pandas
 matplotlib
@@ -18,3 +18,8 @@ mplfinance
 groq
 sentry-sdk[flask]
 websocket-client==1.7.0
+protobuf==3.20.3
+upstox-python-sdk
+google-auth>=2.28.0
+google-auth-oauthlib>=1.2.0
+pymongo==4.6.1
